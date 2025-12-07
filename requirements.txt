@@ -1,0 +1,16 @@
+# --- Core Framework ---
+langgraph                   # Thư viện điều phối luồng Agent (State Machine)
+langchain                   # Framework chính để làm việc với LLM
+langchain-core              # Các thành phần cốt lõi (PromptTemplate, Messages...)
+langchain-google-genai      # Thư viện kết nối với Google Gemini
+
+# --- Data & Validation ---
+pydantic                    # Định nghĩa Schema dữ liệu chặt chẽ cho Tool
+python-dotenv               # Load biến môi trường từ file .env
+
+# --- Connectivity ---
+requests                    # Gọi API sang Java Backend
+mcp                         # (Tùy chọn) Thư viện Model Context Protocol chuẩn
+
+# --- Persistence (Bộ nhớ) ---
+langgraph-checkpoint-sqlite # Lưu lịch sử chat vào database SQLite
