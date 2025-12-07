@@ -2,7 +2,6 @@ import requests
 import json
 from utils.config import Config
 
-
 class ProjectApiClient:
     def __init__(self):
         self.base_url = Config.JAVA_BASE_URL
@@ -17,7 +16,7 @@ class ProjectApiClient:
         return headers
 
     def get(self, endpoint):
-        """Hàm gọi API GET (Mới thêm)"""
+        """Hàm gọi API GET (Lấy thông tin)"""
         url = f"{self.base_url}{endpoint}"
         headers = self.get_headers()
 
@@ -36,7 +35,7 @@ class ProjectApiClient:
             return {"error": str(e), "details": error_msg}
 
     def post_multipart(self, endpoint, payload_dict):
-        """Hàm gọi API POST Multipart (Giữ nguyên)"""
+        """Hàm gọi API POST Multipart (Tạo dự án)"""
         url = f"{self.base_url}{endpoint}"
         headers = self.get_headers(is_multipart=True)
 
@@ -60,5 +59,29 @@ class ProjectApiClient:
             print(f"❌ [API Error]: {error_msg}")
             return {"error": str(e), "details": error_msg}
 
+    # --- HÀM MỚI BỔ SUNG: DELETE ---
+    def delete(self, endpoint):
+        """Hàm gọi API DELETE (Xóa dự án)"""
+        url = f"{self.base_url}{endpoint}"
+        # Delete dùng header thường (như GET)
+        headers = self.get_headers(is_multipart=False)
 
+        try:
+            print(f"🔌 [Project-Client] DELETE {url}")
+            response = requests.delete(url, headers=headers)
+
+            if response.status_code == 401:
+                return {"error": "Token hết hạn hoặc không hợp lệ."}
+
+            # API Delete thường trả về 200 hoặc 204. Nếu lỗi >= 400 thì báo lỗi.
+            if response.status_code >= 400:
+                print(f"❌ [API Error {response.status_code}]: {response.text}")
+                return {"error": f"HTTP {response.status_code}", "details": response.text}
+
+            return {"status": "success", "message": "Deleted successfully"}
+
+        except requests.exceptions.RequestException as e:
+            return {"error": str(e)}
+
+# Singleton instance
 api_client = ProjectApiClient()
