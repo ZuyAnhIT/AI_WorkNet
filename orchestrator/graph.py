@@ -1,7 +1,7 @@
 from langgraph.graph import StateGraph, END, START
 from langgraph.prebuilt import ToolNode
 from langgraph.checkpoint.memory import MemorySaver
-from langchain_core.messages import HumanMessage, AIMessage
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from orchestrator.state import AgentState
 from orchestrator.prompts import SUPERVISOR_SYSTEM_PROMPT
 from utils.llm_factory import get_llm
@@ -36,58 +36,50 @@ def supervisor_node(state: AgentState):
 
     if not isinstance(last_user_msg, HumanMessage): return {"next": "END"}
 
-    # ========================================================================
-    # LOGIC GHIM LUỒNG (STICKY ROUTING) - CỰC KỲ QUAN TRỌNG
-    # ========================================================================
+    # --- 1. STICKY ROUTING (ƯU TIÊN CAO NHẤT) ---
+    # Kiểm tra tin nhắn AI gần nhất để bắt context xác nhận/nhập liệu
     if len(messages) >= 2:
         last_ai_msg = messages[-2]
         if isinstance(last_ai_msg, AIMessage):
-            # Xử lý nội dung AI (nếu là list thì nối lại)
-            raw = last_ai_msg.content
             ai_text = ""
-            if isinstance(raw, str):
-                ai_text = raw
-            elif isinstance(raw, list):
-                for item in raw:
-                    if isinstance(item, str):
-                        ai_text += item
-                    elif isinstance(item, dict):
-                        ai_text += item.get("text", "")
+            if isinstance(last_ai_msg.content, str):
+                ai_text = last_ai_msg.content
+            elif isinstance(last_ai_msg.content, list):
+                for item in last_ai_msg.content:
+                    if isinstance(item, dict): ai_text += item.get("text", "")
 
             ai_text = ai_text.lower()
 
-            # 1. NẾU AI ĐANG HỎI XÁC NHẬN (CONFIRMATION STICKY)
-            # Dấu hiệu: "xác nhận thông tin", "thực hiện không", "đồng ý"
-            if "xác nhận" in ai_text or "thực hiện không" in ai_text or "đồng ý" in ai_text:
-                print(f"\n[ROUTER STICKY] AI đang chờ xác nhận -> Kiểm tra ngữ cảnh...")
+            # Nếu đang hỏi xác nhận hoặc xử lý Excel -> Giữ nguyên Agent cũ
+            if any(k in ai_text for k in ["xác nhận", "thực hiện không", "đồng ý", "import", "excel"]):
+                print(f"\n[ROUTER STICKY] Phát hiện context hội thoại -> Phân tích sâu...")
+                if "task" in ai_text or "công việc" in ai_text: return {"next": "Task_Agent"}
+                if "dự án" in ai_text or "project" in ai_text: return {"next": "Project_Agent"}
 
-                # Nếu nội dung xác nhận có chứa từ khóa của Task
-                if "task" in ai_text or "excel" in ai_text or "danh sách" in ai_text or "số lượng" in ai_text:
-                    print("   -> Điều hướng về: Task_Agent")
-                    return {"next": "Task_Agent"}
+    # --- 2. DEEP CONTEXT ROUTING (AI ĐỌC LỊCH SỬ) ---
+    # Lấy 6 tin nhắn gần nhất để AI hiểu ngữ cảnh
+    recent_msgs = messages[-6:]
+    history_str = ""
+    for m in recent_msgs:
+        role = "User" if isinstance(m, HumanMessage) else "AI"
+        content = m.content if isinstance(m.content, str) else str(m.content)
+        history_str += f"- {role}: {content[:100]}...\n"  # Cắt ngắn để đỡ tốn token
 
-                # Nếu nội dung xác nhận có chứa từ khóa của Project
-                if "dự án" in ai_text or "project" in ai_text:
-                    print("   -> Điều hướng về: Project_Agent")
-                    return {"next": "Project_Agent"}
-
-            # 2. NẾU ĐANG TRONG LUỒNG IMPORT EXCEL/BATCH
-            if "import" in ai_text or "file excel" in ai_text or "dự án đích" in ai_text:
-                print(f"\n[ROUTER STICKY] Đang xử lý Excel -> Task_Agent")
-                return {"next": "Task_Agent"}
-
-    # ========================================================================
-    # LOGIC AI ROUTER (NẾU KHÔNG CÓ STICKY)
-    # ========================================================================
     llm = get_llm(temperature=0)
+
+    # Prompt mới: Cung cấp lịch sử hội thoại
     router_prompt = (
         f"{SUPERVISOR_SYSTEM_PROMPT}\n\n"
-        f"User Input: '{last_user_msg.content}'\n"
-        "CHỈ TRẢ VỀ: 'Project_Agent', 'Task_Agent', hoặc 'General_Agent'."
+        f"=== LỊCH SỬ HỘI THOẠI GẦN ĐÂY (CONTEXT) ===\n"
+        f"{history_str}\n"
+        f"===========================================\n"
+        f"USER INPUT HIỆN TẠI: '{last_user_msg.content}'\n\n"
+        "Dựa vào Lịch sử và Input, hãy chọn Agent phù hợp nhất (Project_Agent / Task_Agent / General_Agent)."
     )
+
     result = llm.invoke(router_prompt).content.strip()
 
-    print(f"\n[ROUTER DEBUG] User: '{last_user_msg.content}' -> Selected: {result}")
+    print(f"\n[ROUTER AI] History analzyed -> Selected: {result}")
 
     if "Task" in result: return {"next": "Task_Agent"}
     if "General" in result: return {"next": "General_Agent"}
@@ -109,25 +101,18 @@ workflow.add_edge(START, "Supervisor")
 workflow.add_conditional_edges(
     "Supervisor",
     lambda x: x["next"],
-    {
-        "Project_Agent": "Project_Agent",
-        "Task_Agent": "Task_Agent",
-        "General_Agent": "General_Agent",
-        "END": END
-    }
+    {"Project_Agent": "Project_Agent", "Task_Agent": "Task_Agent", "General_Agent": "General_Agent", "END": END}
 )
 
 
-def project_cond(state):
-    return "project_tools" if state["messages"][-1].tool_calls else "END"
+def project_cond(state): return "project_tools" if state["messages"][-1].tool_calls else "END"
 
 
 workflow.add_conditional_edges("Project_Agent", project_cond, {"project_tools": "project_tools", "END": END})
 workflow.add_edge("project_tools", "Project_Agent")
 
 
-def task_cond(state):
-    return "task_tools" if state["messages"][-1].tool_calls else "END"
+def task_cond(state): return "task_tools" if state["messages"][-1].tool_calls else "END"
 
 
 workflow.add_conditional_edges("Task_Agent", task_cond, {"task_tools": "task_tools", "END": END})
