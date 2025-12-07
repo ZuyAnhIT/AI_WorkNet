@@ -10,10 +10,12 @@ from .api_client import api_client
 @tool("get_current_date")
 def get_current_date():
     """
-    Lấy ngày giờ hiện tại.
-    Dùng để tính toán khi user nói: "hôm nay", "ngày mai", "tuần sau"...
+    Lấy ngày giờ hiện tại của hệ thống.
+    Luôn gọi tool này đầu tiên nếu người dùng nhắc đến thời gian tương đối như:
+    "hôm nay", "ngày mai", "tuần sau", "thứ 2 tới"... để tính toán ngày chính xác.
     """
     now = datetime.now()
+    # Trả về kèm thứ trong tuần để AI dễ tính (VD: Monday)
     return f"Hôm nay là: {now.strftime('%Y-%m-%d')} (Thứ {now.strftime('%A')})"
 
 
@@ -109,7 +111,7 @@ def create_project(name: str, code: str, description: str, company_id: int, work
 
 
 # =============================================================================
-# TOOL 4: XÓA DỰ ÁN (MỚI THÊM)
+# TOOL 4: XÓA DỰ ÁN
 # =============================================================================
 class DeleteProjectInput(BaseModel):
     company_id: int = Field(description="ID công ty chứa dự án")
@@ -133,3 +135,44 @@ def delete_project(company_id: int, workspace_id: int, project_id: int):
         return f"Thất bại: {result.get('details', result['error'])}"
 
     return f"Thành công! Dự án ID {project_id} đã bị xóa vĩnh viễn."
+
+
+# =============================================================================
+# TOOL 5: XEM CHI TIẾT DỰ ÁN (MỚI THÊM)
+# =============================================================================
+class GetProjectDetailsInput(BaseModel):
+    company_id: int = Field(description="ID công ty")
+    workspace_id: int = Field(description="ID workspace")
+    project_id: int = Field(description="ID dự án")
+
+
+@tool("get_project_details", args_schema=GetProjectDetailsInput)
+def get_project_details(company_id: int, workspace_id: int, project_id: int):
+    """
+    Xem thông tin chi tiết, tiến độ và trạng thái của một dự án cụ thể.
+    Sử dụng tool này khi user hỏi: "Xem thông tin dự án A", "Tiến độ dự án B".
+    """
+    endpoint = f"/api/companies/{company_id}/workspaces/{workspace_id}/projects/{project_id}"
+    print(f"🔍 [Tool] Đang xem chi tiết Project ID {project_id}...")
+
+    result = api_client.get(endpoint)
+
+    if "error" in result:
+        return f"Thất bại: {result.get('details', result['error'])}"
+
+    data = result.get("data", {})
+    if not data: return "Không tìm thấy dữ liệu dự án."
+
+    # Format dữ liệu đẹp để AI đọc cho User
+    return f"""
+    ### 📊 CHI TIẾT DỰ ÁN: {data.get('name')}
+
+    - **Mã dự án:** {data.get('projectCode')}
+    - **Trạng thái:** {data.get('status')}
+    - **Độ ưu tiên:** {data.get('priority')}
+    - **Tiến độ:** {data.get('progress')}%
+    - **Mục tiêu:** {data.get('goal')}
+    - **Mô tả:** {data.get('description')}
+    - **Thời gian:** {data.get('startDate')} -> {data.get('dueDate')}
+    - **Người tạo:** {data.get('createdByName')}
+    """
