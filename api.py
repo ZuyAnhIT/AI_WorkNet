@@ -3,6 +3,7 @@ import shutil
 import os
 import sys
 import asyncio
+import traceback
 from pathlib import Path
 from typing import Optional, Union, List, Dict
 
@@ -13,7 +14,6 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-# 1. Fix lỗi import
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from langchain_core.messages import HumanMessage
@@ -67,9 +67,10 @@ def normalize_ai_response(content: Union[str, List[Union[str, Dict]]]) -> str:
     return str(content)
 
 
-# --- HELPER: Xử lý logic chính ---
+# --- HELPER: Xử lý logic chính (Đã thêm Try-Catch Bọc Đường) ---
 async def process_chat(message_content: str, thread_id: str, token: str = None):
     try:
+        # --- LOGIC XỬ LÝ CHÍNH ---
         if token:
             set_user_token(token)
             print(f"🔑 [API] Token received: {token[:10]}...")
@@ -84,7 +85,7 @@ async def process_chat(message_content: str, thread_id: str, token: str = None):
 
         last_message = output["messages"][-1]
 
-        # --- SỬ DỤNG HÀM CHUẨN HÓA ---
+        # Chuẩn hóa output
         final_text = normalize_ai_response(last_message.content)
 
         print("✅ [API] Xử lý xong.")
@@ -96,13 +97,44 @@ async def process_chat(message_content: str, thread_id: str, token: str = None):
             "tool_calls": last_message.tool_calls if hasattr(last_message, 'tool_calls') else None
         }
 
-    except asyncio.TimeoutError:
-        raise HTTPException(status_code=504, detail="AI xử lý quá lâu (Timeout).")
-    except asyncio.CancelledError:
-        return {"success": False, "response": "Request cancelled"}
+    # --- BẮT LỖI VÀ TRẢ VỀ THÔNG BÁO THÂN THIỆN ---
     except Exception as e:
-        print(f"❌ [API] Error: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        # 1. In lỗi chi tiết ra Terminal để Dev sửa
+        error_log = str(e).lower()
+        print(f"❌ [API Error Log]: {str(e)}")
+        traceback.print_exc()
+
+        # 2. Chọn câu thông báo cho người dùng
+        friendly_message = "Hệ thống đang bận xử lý, bạn vui lòng thử lại sau giây lát nhé."
+
+        if "429" in error_log or "resource_exhausted" in error_log:
+            friendly_message = "⚠️ Hệ thống đang tạm hết hạn mức miễn phí trong ngày. Bạn vui lòng quay lại sau hoặc liên hệ quản trị viên để nâng cấp."
+
+        elif "503" in error_log or "overloaded" in error_log or "unavailable" in error_log:
+            friendly_message = "⚠️ Máy chủ AI đang quá tải do nhiều người dùng cùng lúc. Bạn hãy đợi khoảng 1 phút rồi nhắn lại nhé."
+
+        elif "404" in error_log or "not_found" in error_log:
+            friendly_message = "🛠️ Tính năng AI này đang được bảo trì để nâng cấp. Vui lòng thử lại sau."
+
+        elif "403" in error_log or "permission_denied" in error_log:
+            friendly_message = "🔒 Hệ thống gặp sự cố xác thực kết nối. Vui lòng báo cho kỹ thuật viên."
+
+        elif "timeout" in error_log:
+            friendly_message = "⏱️ AI suy nghĩ hơi lâu nên bị ngắt kết nối. Bạn hãy thử hỏi lại câu ngắn hơn xem sao."
+
+        elif "list" in error_log and "strip" in error_log:
+            friendly_message = "⚠️ Lỗi cấu hình nội bộ. Vui lòng báo Admin kiểm tra file cấu hình."
+
+        # 3. TRẢ VỀ JSON 200 OK (Để giao diện không báo lỗi đỏ)
+        # Frontend sẽ hiển thị 'friendly_message' như một tin nhắn bình thường của Bot
+        return JSONResponse(
+            status_code=200,
+            content={
+                "success": False,  # Đánh dấu là false nhưng vẫn trả về 200
+                "response": friendly_message,
+                "thread_id": thread_id
+            }
+        )
 
 
 # --- ENDPOINT 1: CHAT TEXT ---
@@ -139,7 +171,15 @@ async def chat_with_file(
         """
         return await process_chat(system_msg, thread_id, token)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
+        # Nếu lỗi ngay khâu upload file (chưa vào process_chat)
+        print(f"❌ [Upload Error]: {str(e)}")
+        return JSONResponse(
+            status_code=200,
+            content={
+                "success": False,
+                "response": "⚠️ Lỗi khi tải file lên. Vui lòng kiểm tra lại file của bạn."
+            }
+        )
 
 
 # --- HEALTH CHECK ---
