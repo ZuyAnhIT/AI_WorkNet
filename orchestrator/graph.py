@@ -17,7 +17,7 @@ task_agent_model, task_tools = create_task_agent()
 general_agent_model = create_general_agent()
 
 
-# 2. Nodes
+# 2. Nodes Definition
 def project_node(state: AgentState):
     return {"messages": [project_agent_model.invoke(state["messages"])]}
 
@@ -36,57 +36,86 @@ def supervisor_node(state: AgentState):
 
     if not isinstance(last_user_msg, HumanMessage): return {"next": "END"}
 
-    # --- 1. STICKY ROUTING (ƯU TIÊN CAO NHẤT) ---
-    # Kiểm tra tin nhắn AI gần nhất để bắt context xác nhận/nhập liệu
+    # ========================================================================
+    # 1. LOGIC GHIM LUỒNG (STICKY ROUTING) - QUAN TRỌNG
+    # ========================================================================
     if len(messages) >= 2:
         last_ai_msg = messages[-2]
         if isinstance(last_ai_msg, AIMessage):
+            # Xử lý nội dung AI (List/String)
+            raw = last_ai_msg.content
             ai_text = ""
-            if isinstance(last_ai_msg.content, str):
-                ai_text = last_ai_msg.content
-            elif isinstance(last_ai_msg.content, list):
-                for item in last_ai_msg.content:
-                    if isinstance(item, dict): ai_text += item.get("text", "")
+            if isinstance(raw, str):
+                ai_text = raw
+            elif isinstance(raw, list):
+                for item in raw:
+                    if isinstance(item, str):
+                        ai_text += item
+                    elif isinstance(item, dict):
+                        ai_text += item.get("text", "")
 
             ai_text = ai_text.lower()
 
-            # Nếu đang hỏi xác nhận hoặc xử lý Excel -> Giữ nguyên Agent cũ
-            if any(k in ai_text for k in ["xác nhận", "thực hiện không", "đồng ý", "import", "excel"]):
-                print(f"\n[ROUTER STICKY] Phát hiện context hội thoại -> Phân tích sâu...")
-                if "task" in ai_text or "công việc" in ai_text: return {"next": "Task_Agent"}
-                if "dự án" in ai_text or "project" in ai_text: return {"next": "Project_Agent"}
+            # A. CHECK NẾU ĐANG HỎI XÁC NHẬN (CONFIRMATION)
+            # Dấu hiệu: "xác nhận", "thực hiện không", "đồng ý", "bảng dưới đây"
+            if "xác nhận" in ai_text or "thực hiện không" in ai_text or "đồng ý" in ai_text:
+                print(f"\n[ROUTER STICKY] AI đang chờ xác nhận -> Phân tích đối tượng trong bảng...")
 
-    # --- 2. DEEP CONTEXT ROUTING (AI ĐỌC LỊCH SỬ) ---
+                # Ưu tiên 1: Nếu là Project (và KHÔNG CÓ từ khóa Task) -> Project_Agent
+                # (Tránh trường hợp xóa dự án mà lại nhảy sang task)
+                if ("dự án" in ai_text or "project" in ai_text) and (
+                        "task" not in ai_text and "công việc" not in ai_text):
+                    print("   -> Context: Project_Agent (Pure Project)")
+                    return {"next": "Project_Agent"}
+
+                # Ưu tiên 2: Nếu có từ khóa Task/Excel -> Task_Agent
+                if "task" in ai_text or "excel" in ai_text or "công việc" in ai_text:
+                    print("   -> Context: Task_Agent")
+                    return {"next": "Task_Agent"}
+
+                # Ưu tiên 3: Fallback về Project nếu còn nghi ngờ
+                if "dự án" in ai_text or "project" in ai_text:
+                    print("   -> Context: Project_Agent (Fallback)")
+                    return {"next": "Project_Agent"}
+
+            # B. CHECK NẾU ĐANG TRONG LUỒNG EXCEL/BATCH (LUÔN LÀ TASK AGENT)
+            if "import" in ai_text or "file excel" in ai_text or "dự án đích" in ai_text:
+                print(f"\n[ROUTER STICKY] Đang xử lý Excel -> Task_Agent")
+                return {"next": "Task_Agent"}
+
+    # ========================================================================
+    # 2. LOGIC AI ROUTER (DEEP CONTEXT)
+    # ========================================================================
+
     # Lấy 6 tin nhắn gần nhất để AI hiểu ngữ cảnh
     recent_msgs = messages[-6:]
     history_str = ""
     for m in recent_msgs:
         role = "User" if isinstance(m, HumanMessage) else "AI"
         content = m.content if isinstance(m.content, str) else str(m.content)
-        history_str += f"- {role}: {content[:100]}...\n"  # Cắt ngắn để đỡ tốn token
+        history_str += f"- {role}: {content[:150]}...\n"
 
-    llm = get_llm(temperature=0)
+    llm = get_llm(temperature=0, role="supervisor")
 
-    # Prompt mới: Cung cấp lịch sử hội thoại
     router_prompt = (
         f"{SUPERVISOR_SYSTEM_PROMPT}\n\n"
-        f"=== LỊCH SỬ HỘI THOẠI GẦN ĐÂY (CONTEXT) ===\n"
+        f"=== LỊCH SỬ HỘI THOẠI (CONTEXT) ===\n"
         f"{history_str}\n"
-        f"===========================================\n"
+        f"===================================\n"
         f"USER INPUT HIỆN TẠI: '{last_user_msg.content}'\n\n"
-        "Dựa vào Lịch sử và Input, hãy chọn Agent phù hợp nhất (Project_Agent / Task_Agent / General_Agent)."
+        "QUYẾT ĐỊNH: Dựa vào lịch sử và input, hãy chọn 1 Agent duy nhất (Project_Agent / Task_Agent / General_Agent)."
     )
 
     result = llm.invoke(router_prompt).content.strip()
 
-    print(f"\n[ROUTER AI] History analzyed -> Selected: {result}")
+    print(f"\n[ROUTER AI] Deep Context -> Selected: {result}")
 
     if "Task" in result: return {"next": "Task_Agent"}
     if "General" in result: return {"next": "General_Agent"}
-    return {"next": "Project_Agent"}
+    return {"next": "Project_Agent"}  # Mặc định
 
 
-# 3. Graph Construction (Giữ nguyên)
+# 3. Graph Construction
 workflow = StateGraph(AgentState)
 
 workflow.add_node("Supervisor", supervisor_node)
@@ -98,26 +127,37 @@ workflow.add_node("task_tools", ToolNode(task_tools))
 
 workflow.add_edge(START, "Supervisor")
 
+# Conditional Edges
 workflow.add_conditional_edges(
     "Supervisor",
     lambda x: x["next"],
-    {"Project_Agent": "Project_Agent", "Task_Agent": "Task_Agent", "General_Agent": "General_Agent", "END": END}
+    {
+        "Project_Agent": "Project_Agent",
+        "Task_Agent": "Task_Agent",
+        "General_Agent": "General_Agent",
+        "END": END
+    }
 )
 
 
-def project_cond(state): return "project_tools" if state["messages"][-1].tool_calls else "END"
+# Logic Project
+def project_cond(state):
+    return "project_tools" if state["messages"][-1].tool_calls else "END"
 
 
 workflow.add_conditional_edges("Project_Agent", project_cond, {"project_tools": "project_tools", "END": END})
 workflow.add_edge("project_tools", "Project_Agent")
 
 
-def task_cond(state): return "task_tools" if state["messages"][-1].tool_calls else "END"
+# Logic Task
+def task_cond(state):
+    return "task_tools" if state["messages"][-1].tool_calls else "END"
 
 
 workflow.add_conditional_edges("Task_Agent", task_cond, {"task_tools": "task_tools", "END": END})
 workflow.add_edge("task_tools", "Task_Agent")
 
+# Logic General
 workflow.add_edge("General_Agent", END)
 
 app = workflow.compile(checkpointer=MemorySaver())
