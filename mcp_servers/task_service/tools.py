@@ -249,3 +249,143 @@ def delete_task(company_id: int, workspace_id: int, project_id: int, task_id: in
         return f"Thất bại: {result.get('details', result['error'])}"
 
     return f"Thành công! Task ID {task_id} đã xóa."
+
+
+# =============================================================================
+# 7. QUY TRÌNH XOÁ TASK AN TOÀN (TÌM KIẾM -> XÁC NHẬN -> XOÁ)
+# =============================================================================
+
+class FindTasksToDeleteInput(BaseModel):
+    target_project_name: str = Field(description="Tên dự án chứa task")
+    task_keywords: List[str] = Field(description="Danh sách tên hoặc từ khóa của các task muốn xóa")
+
+
+@tool("find_tasks_to_delete", args_schema=FindTasksToDeleteInput)
+def find_tasks_to_delete(target_project_name: str, task_keywords: List[str]):
+    """
+    BƯỚC 1: Tìm ID các task dựa trên tên người dùng cung cấp.
+    Dùng tool này để hiển thị danh sách cho người dùng XÁC NHẬN trước khi xóa.
+    """
+    print(f"🔍 [Delete-Flow] Tìm task '{task_keywords}' trong dự án '{target_project_name}'...")
+
+    # 1. Lấy thông tin dự án
+    project_map = get_project_mapping()
+    if not project_map: return "Lỗi: Không lấy được danh sách dự án."
+
+    ids = project_map.get(target_project_name.lower().strip())
+    if not ids: return f"❌ Lỗi: Không tìm thấy dự án '{target_project_name}'."
+
+    # 2. Lấy toàn bộ task trong dự án đó
+    endpoint = f"/api/companies/{ids['company_id']}/workspaces/{ids['workspace_id']}/projects/{ids['project_id']}/tasks"
+    result = api_client.get(endpoint)
+
+    if isinstance(result, dict) and "error" in result:
+        return f"Lỗi API: {result.get('details', result['error'])}"
+
+    # 3. Xử lý dữ liệu trả về an toàn (Fix lỗi TypeError string indices)
+    raw_data = result.get("data", [])
+
+    # Xác định all_tasks là List
+    all_tasks = []
+    if isinstance(raw_data, list):
+        all_tasks = raw_data
+    elif isinstance(raw_data, dict):
+        # Support phân trang (content/items)
+        if "content" in raw_data:
+            all_tasks = raw_data["content"]
+        elif "items" in raw_data:
+            all_tasks = raw_data["items"]
+        else:
+            all_tasks = [raw_data]  # Fallback
+
+    if not all_tasks: return "Dự án này trống, không có task nào để xóa."
+
+    # 4. Lọc task theo từ khóa (Safe loop)
+    found_tasks = []
+    not_found = []
+
+    for kw in task_keywords:
+        kw_lower = kw.lower().strip()
+        matches = []
+
+        for t in all_tasks:
+            # Kiểm tra t có phải dict không
+            if not isinstance(t, dict): continue
+
+            # Lấy tên task (hỗ trợ cả title và name)
+            t_name = str(t.get('title') or t.get('name', '')).lower()
+
+            if kw_lower in t_name:
+                matches.append(t)
+
+        if matches:
+            for m in matches:
+                # Tránh trùng lặp
+                if not any(ft['id'] == m['id'] for ft in found_tasks):
+                    found_tasks.append(m)
+        else:
+            not_found.append(kw)
+
+    # 5. Trả về kết quả dạng Text
+    if not found_tasks:
+        return f"Không tìm thấy task nào khớp với các từ khóa: {', '.join(not_found)}"
+
+    response_lines = ["⚠️ TÔI ĐÃ TÌM THẤY CÁC TASK SAU, BẠN CÓ CHẮC MUỐN XÓA KHÔNG?"]
+    response_lines.append(f"(Dự án: {target_project_name})")
+    response_lines.append("-" * 30)
+
+    # Format danh sách để Agent hiển thị cho user chọn
+    for t in found_tasks:
+        display_name = t.get('title') or t.get('name', 'No Name')
+        status = t.get('status', 'Unknown')
+        response_lines.append(f"🔴 ID: {t['id']} | Tên: {display_name} | Trạng thái: {status}")
+
+    response_lines.append("-" * 30)
+    if not_found:
+        response_lines.append(f"(Không tìm thấy: {', '.join(not_found)})")
+
+    response_lines.append("\n👉 Nếu đồng ý, hãy yêu cầu xóa các ID ở trên (hoặc 'Xóa hết danh sách trên').")
+
+    return "\n".join(response_lines)
+
+
+class BatchDeleteInput(BaseModel):
+    target_project_name: str = Field(description="Tên dự án")
+    task_ids: List[int] = Field(description="Danh sách ID các task cần xóa")
+
+
+@tool("execute_delete_tasks_batch", args_schema=BatchDeleteInput)
+def execute_delete_tasks_batch(target_project_name: str, task_ids: List[int]):
+    """
+    BƯỚC 2: Thực hiện xóa hàng loạt task sau khi người dùng đã chốt ID.
+    """
+    print(f"🔥 [Delete-Flow] Đang xóa {len(task_ids)} task trong '{target_project_name}'...")
+
+    # (Đoạn lấy project_map giữ nguyên để validate tên dự án, nhưng không dùng ID project để gọi API nữa)
+    project_map = get_project_mapping()
+    ids = project_map.get(target_project_name.lower().strip())
+
+    if not ids:
+        # Nếu không tìm thấy dự án, vẫn cho phép xóa nếu user chắc chắn (hoặc return lỗi tùy bạn)
+        # Nhưng tốt nhất cứ return lỗi để an toàn
+        return f"❌ Lỗi: Không tìm thấy dự án '{target_project_name}'."
+
+    results = []
+    success_count = 0
+
+    # 2. Vòng lặp xóa từng ID
+    for tid in task_ids:
+        # --- SỬA LẠI ENDPOINT CHO ĐÚNG VỚI BACKEND ---
+        endpoint = f"/api/tasks/{tid}"
+        # ---------------------------------------------
+
+        print(f"🔌 [DELETE] {endpoint}")  # Debug log
+        res = api_client.delete(endpoint)
+
+        if "error" in res:
+            results.append(f"❌ ID {tid}: Thất bại - {res.get('details', res.get('message', 'Lỗi lạ'))}")
+        else:
+            success_count += 1
+            results.append(f"✅ ID {tid}: Đã xóa.")
+
+    return f"### KẾT QUẢ XÓA:\nThành công: {success_count}/{len(task_ids)}\n{chr(10).join(results)}"
