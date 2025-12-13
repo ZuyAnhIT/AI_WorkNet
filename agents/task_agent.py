@@ -12,7 +12,8 @@ from mcp_servers.task_service.tools import (
     execute_delete_tasks_batch,  # Xóa an toàn B2: Xóa thật
     recommend_assignee,  # Gợi ý người thực hiện (Smart Assign)
     get_project_members,  # Lấy danh sách thành viên (Map Tên -> ID)
-    get_project_forecast  # [MỚI] Dự báo tiến độ & rủi ro
+    get_project_forecast,  # Dự báo tiến độ & rủi ro
+    get_daily_standup  # [MỚI] Báo cáo họp nhanh (Daily Standup)
 )
 
 # 2. Import tool tra cứu ID từ Project Service (Để Task Agent tự tìm ID dự án)
@@ -45,7 +46,8 @@ def create_task_agent():
 
         # --- Nhóm Thông Minh (Analytics) ---
         recommend_assignee,
-        get_project_forecast  # <--- Tool mới vừa thêm
+        get_project_forecast,
+        get_daily_standup  # <--- Tool mới vừa thêm
     ]
 
     # Thiết lập Prompt
