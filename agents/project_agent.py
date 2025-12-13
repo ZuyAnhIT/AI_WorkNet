@@ -1,15 +1,18 @@
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from utils.llm_factory import get_llm
 
-# --- QUAN TRỌNG: Import đủ 6 tool của Project Service ---
+# --- IMPORT CÁC TOOL CỦA PROJECT SERVICE ---
 from mcp_servers.project_service.tools import (
-    create_project,
-    get_user_profile,
-    get_current_date,
-    delete_project,
-    get_project_details,
-    update_project  # <--- Tool mới thêm để cập nhật dự án
+    create_project,  # Tạo dự án
+    update_project,  # Cập nhật dự án
+    delete_project,  # Xóa dự án
+    get_project_details,  # Xem chi tiết
+    get_user_profile,  # Xem profile chung
+    get_current_date,  # Lấy ngày giờ
+    find_project_context,  # [QUAN TRỌNG] Tra cứu ID dự án từ tên (cho việc Sửa/Xóa/Xem)
+    lookup_hierarchy  # [MỚI] Tra cứu ID Công ty/Workspace (cho việc TẠO dự án)
 )
+
 from orchestrator.prompts import PROJECT_AGENT_SYSTEM_PROMPT
 
 
@@ -18,14 +21,21 @@ def create_project_agent():
     llm = get_llm(temperature=0)
 
     # --- ĐĂNG KÝ DANH SÁCH TOOL ---
-    # Agent sẽ được phép sử dụng 6 công cụ này
+    # Agent sẽ được phép sử dụng tất cả 8 công cụ này
     tools = [
-        create_project,  # Tạo dự án mới
-        get_user_profile,  # Tra cứu ID Company/Workspace/Project
-        get_current_date,  # Lấy ngày giờ hiện tại
-        delete_project,  # Xóa dự án
-        get_project_details,  # Xem chi tiết tiến độ dự án
-        update_project  # Cập nhật thông tin dự án
+        # Nhóm thao tác (CRUD)
+        create_project,
+        update_project,
+        delete_project,
+
+        # Nhóm thông tin
+        get_project_details,
+        get_user_profile,
+        get_current_date,
+
+        # Nhóm tra cứu (Lookup)
+        find_project_context,  # Giúp tìm dự án đã có
+        lookup_hierarchy  # Giúp tìm nơi để tạo dự án mới
     ]
 
     # Thiết lập Prompt
