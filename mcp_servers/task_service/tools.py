@@ -389,3 +389,61 @@ def execute_delete_tasks_batch(target_project_name: str, task_ids: List[int]):
             results.append(f"✅ ID {tid}: Đã xóa.")
 
     return f"### KẾT QUẢ XÓA:\nThành công: {success_count}/{len(task_ids)}\n{chr(10).join(results)}"
+
+
+class RecommendAssigneeInput(BaseModel):
+    project_name: str = Field(description="Tên dự án")
+    title: str = Field(description="Tiêu đề task")
+    description: Optional[str] = Field(description="Mô tả chi tiết (nếu có)", default="")  # <--- THÊM
+    task_type: Optional[str] = Field(description="Loại task: 'STORY' hoặc 'BUG'", default="STORY")
+    tags: Optional[List[str]] = Field(description="Danh sách thẻ/keyword (VD: ['java', 'backend'])",
+                                      default=[])  # <--- THÊM
+    story_points: Optional[int] = Field(description="Độ khó ước lượng", default=3)
+
+
+@tool("recommend_assignee", args_schema=RecommendAssigneeInput)
+def recommend_assignee(project_name: str, title: str, description: str = "", task_type: str = "STORY",
+                       tags: List[str] = [], story_points: int = 3):
+    """
+    Phân tích và gợi ý nhân sự phù hợp nhất cho task.
+    """
+    print(f"🧠 [Smart-Tool] Phân tích ứng viên: {title} (Tags: {tags})...")
+
+    # 1. Lấy ID dự án
+    project_map = get_project_mapping()
+    ids = project_map.get(project_name.lower().strip())
+    if not ids: return f"❌ Lỗi: Không tìm thấy dự án '{project_name}'."
+    project_id = ids['project_id']
+
+    # 2. Gọi API Analytics (Cập nhật payload đầy đủ)
+    endpoint = f"/api/analytics/projects/{project_id}/recommend-assignee"
+
+    payload = {
+        "title": title,
+        "description": description,  # <--- Gửi thêm Description
+        "taskType": task_type.upper(),
+        "tags": tags,  # <--- Gửi thêm Tags
+        "storyPoints": story_points
+    }
+
+    # Debug xem Payload gửi đi có đúng ý bạn không
+    # print(f"DEBUG PAYLOAD: {payload}")
+
+    result = api_client.post(endpoint, payload)
+
+    if "error" in result:
+        return f"Lỗi AI phân tích: {result.get('details', result['error'])}"
+
+    # 3. Xử lý kết quả (Giữ nguyên logic hiển thị cũ)
+    candidates = result if isinstance(result, list) else result.get("data", [])
+    if not candidates: return "Không tìm thấy ứng viên phù hợp."
+
+    output_lines = [f"### KẾT QUẢ ĐỀ XUẤT CHO: '{title}'"]
+    if tags: output_lines.append(f"(Tags: {', '.join(tags)})")
+
+    for idx, c in enumerate(candidates, 1):
+        output_lines.append(f"{'🥇' if idx == 1 else '🥈'} **{c.get('fullName')}** (Score: {c.get('matchScore')})")
+        output_lines.append(f"   - Lý do: {c.get('reason')}")
+        output_lines.append("---")
+
+    return "\n".join(output_lines)
