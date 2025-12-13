@@ -3,8 +3,8 @@ from pydantic import BaseModel, Field
 from datetime import datetime
 from typing import Optional, List
 from .api_client import api_client
-
-
+from enum import Enum
+from urllib.parse import urlencode
 # =============================================================================
 # HELPER: MAPPING DỮ LIỆU (Đã nâng cấp để lấy TÊN)
 # =============================================================================
@@ -303,3 +303,92 @@ def lookup_hierarchy(company_name: str, workspace_name: str):
         return f"❌ Không tìm thấy Workspace nào tên giống '{workspace_name}'."
 
     return "✅ TÌM THẤY THÔNG TIN:\n" + "\n".join(found_info) + "\n--> Hãy dùng ID trên để gọi create_project."
+
+# =============================================================================
+# TOOL 9: LẤY DANH SÁCH DỰ ÁN TRONG WORKSPACE (API MỚI)
+# =============================================================================
+
+# 1. Định nghĩa Enum trạng thái để AI chọn chính xác
+class ProjectStatus(str, Enum):
+    ACTIVE = "ACTIVE"
+    NEW = "NEW"
+    IN_PROGRESS = "IN_PROGRESS"
+    PAUSED = "PAUSED"
+    COMPLETED = "COMPLETED"
+    CANCELLED = "CANCELLED"
+
+
+# 2. Định nghĩa Input Schema
+class GetWorkspaceProjectsInput(BaseModel):
+    company_id: int = Field(description="ID của công ty (Lấy từ tool get_user_profile)")
+    workspace_id: int = Field(description="ID của workspace (Lấy từ tool get_user_profile)")
+    status: Optional[ProjectStatus] = Field(default=None,
+                                            description="Lọc trạng thái: NEW, IN_PROGRESS, COMPLETED... (Để trống nếu lấy tất cả)")
+    limit: int = Field(default=10, description="Số lượng dự án muốn lấy (Mặc định 10)")
+
+
+# 3. Hàm xử lý chính
+@tool("get_workspace_projects", args_schema=GetWorkspaceProjectsInput)
+def get_workspace_projects(
+        company_id: int,
+        workspace_id: int,
+        status: Optional[ProjectStatus] = None,
+        limit: int = 10
+):
+    """
+    Dùng tool này để XEM DANH SÁCH DỰ ÁN.
+    Gọi API lấy danh sách dự án đầy đủ trong một Workspace cụ thể.
+    """
+    print(f"📂 [Project-Tool] Đang lấy list dự án tại Workspace {workspace_id} (Status: {status})...")
+
+    # Endpoint gốc
+    endpoint = f"/api/companies/{company_id}/workspaces/{workspace_id}/projects"
+
+    # Tạo dict tham số
+    params = {
+        "page": 0,
+        "size": limit,
+        "sortBy": "createdAt",
+        "sortDir": "desc"
+    }
+
+    # Nếu có status thì thêm vào dict
+    if status:
+        params["status"] = status.value
+
+    # --- [SỬA LỖI TẠI ĐÂY] ---
+    # Thay vì truyền params=params, ta nối chuỗi thủ công:
+    query_string = urlencode(params)
+    full_url = f"{endpoint}?{query_string}"
+
+    # Gọi API với full_url (api_client.get chỉ nhận 1 tham số url)
+    result = api_client.get(full_url)
+
+    # Xử lý lỗi trả về từ wrapper api_client
+    if "error" in result:
+        return f"❌ Lỗi API: {result['error']}"
+
+    # Lấy dữ liệu từ response JSON chuẩn
+    # Cấu trúc: { success: true, data: { content: [...] } }
+    data = result.get("data", {})
+    projects_list = data.get("content", [])
+
+    if not projects_list:
+        return "📭 Không tìm thấy dự án nào trong Workspace này."
+
+    # Format kết quả trả về dạng Text để AI dễ đọc
+    output_lines = [f"✅ Tìm thấy {len(projects_list)} dự án:"]
+
+    for p in projects_list:
+        p_id = p.get("id")
+        name = p.get("name")
+        code = p.get("projectCode")
+        stt = p.get("status")
+        progress = p.get("progress", 0)
+        manager = p.get("managerName", "N/A")
+
+        # Dòng format: "- [ID: 123] Tên Dự Án (Code) | Status | Progress | Manager"
+        line = f"- [ID: {p_id}] {name} ({code}) | Trạng thái: {stt} | Tiến độ: {progress}% | QL: {manager}"
+        output_lines.append(line)
+
+    return "\n".join(output_lines)

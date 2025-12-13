@@ -1,91 +1,86 @@
 import os
 import itertools
-from langchain_google_genai import ChatGoogleGenerativeAI
-from utils.config import Config
 from dotenv import load_dotenv
 
-# Load lại env để chắc chắn cập nhật mới nhất
+# Load môi trường
 load_dotenv(override=True)
 
 
-# =============================================================================
-# 1. LOGIC LOAD KEY AN TOÀN
-# =============================================================================
+# ... (Giữ nguyên class GeminiKeyManager không đổi) ...
+class GeminiKeyManager:
+    _key_cycle = None
 
-def safe_load_keys():
-    """
-    Load key an toàn, chấp nhận cả String (từ .env) và List (từ Config).
-    """
-    keys_to_process = []
+    @classmethod
+    def get_next_key(cls):
+        if cls._key_cycle is None:
+            cls._init_keys()
+        return next(cls._key_cycle)
 
-    # 1. Ưu tiên lấy từ biến môi trường
-    env_val = os.getenv("GEMINI_API_KEYS", "")
-    if env_val:
-        keys_to_process = env_val
-
-    # 2. Nếu env rỗng, thử lấy từ Config
-    if not keys_to_process:
-        keys_to_process = getattr(Config, "GEMINI_API_KEYS", None) or getattr(Config, "GEMINI_API_KEY", None)
-
-    # 3. Xử lý chuẩn hóa
-    final_keys = []
-
-    if isinstance(keys_to_process, list):
-        for k in keys_to_process:
-            s = str(k).strip()
-            if s: final_keys.append(s)
-
-    elif isinstance(keys_to_process, str):
-        for k in keys_to_process.split(","):
-            s = str(k).strip()
-            if s: final_keys.append(s)
-
-    # 4. Fallback cuối cùng
-    if not final_keys:
-        single = os.getenv("GEMINI_API_KEY")
-        if single:
-            final_keys = [str(single).strip()]
-
-    return final_keys
-
-
-# Thực thi load
-_keys_list = safe_load_keys()
-
-# Nếu vẫn rỗng -> Báo lỗi nhưng không crash server ngay (để dễ debug)
-if not _keys_list:
-    print("⚠️  CẢNH BÁO: Không tìm thấy API Key nào! Hãy kiểm tra .env.")
-    _keys_list = ["DUMMY_KEY"]
-
-# Tạo vòng lặp vô tận
-_key_cycle = itertools.cycle(_keys_list)
-
-print(f"🔑 [System] Đã tải {_keys_list.__len__()} API Keys. Hệ thống sẵn sàng!")
-
-
-def get_next_key():
-    return next(_key_cycle)
+    @classmethod
+    def _init_keys(cls):
+        raw_keys = os.getenv("GEMINI_API_KEYS") or os.getenv("GEMINI_API_KEY") or ""
+        final_keys = [k.strip() for k in raw_keys.replace('\n', ',').split(',') if k.strip()]
+        if not final_keys:
+            print("⚠️ [Gemini Manager] Không tìm thấy Key! Sử dụng key giả.")
+            final_keys = ["DUMMY_KEY"]
+        print(f"🔑 [Gemini Manager] Đã tải {len(final_keys)} API Keys.")
+        cls._key_cycle = itertools.cycle(final_keys)
 
 
 # =============================================================================
-# 2. FACTORY FUNCTION
+# 2. FACTORY CHÍNH (Đã fix lỗi tham số role)
 # =============================================================================
-
-def get_llm(temperature=0, role="general"):
+def get_llm(temperature=0, role=None, **kwargs):  # <--- THÊM role và **kwargs VÀO ĐÂY
     """
-    Factory trả về LLM, tự động đổi Key mỗi lần gọi.
+    Factory trả về LLM dựa trên biến môi trường LLM_PROVIDER.
+    Chấp nhận tham số 'role' để tương thích ngược nhưng có thể không dùng.
     """
-    current_key = get_next_key()
+    # Mặc định dùng 'groq' nếu không khai báo
+    provider = os.getenv("LLM_PROVIDER", "groq").lower()
 
-    # [DEBUG] Bỏ comment dòng dưới nếu bạn muốn biết chính xác key nào đang được dùng
-    # masked_key = f"...{current_key[-6:]}" if len(current_key) > 6 else "Key???"
-    # print(f"🔄 [LLM] Role '{role}' đang dùng Key: {masked_key}")
+    # (Optional) Log xem role nào đang gọi
+    # if role: print(f"🤖 [LLM Factory] Role '{role}' đang yêu cầu model {provider.upper()}")
 
-    llm = ChatGoogleGenerativeAI(
-        model=Config.GEMINI_MODEL,
-        google_api_key=current_key,
-        temperature=temperature,
-        # convert_system_message_to_human=True, # <--- Đã xóa dòng này vì nó Deprecated
-        max_retries=5
-    )
-    return llm
+    # --- 1. GROQ (ƯU TIÊN SỐ 1) ---
+    if provider == "groq":
+        from langchain_groq import ChatGroq
+        return ChatGroq(
+            model=os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"),
+            temperature=temperature,
+            api_key=os.getenv("GROQ_API_KEY"),
+            max_retries=2
+        )
+
+    # --- 2. DEEPSEEK ---
+    elif provider == "deepseek":
+        from langchain_openai import ChatOpenAI
+        return ChatOpenAI(
+            model="deepseek-chat",
+            temperature=temperature,
+            openai_api_key=os.getenv("DEEPSEEK_API_KEY"),
+            openai_api_base="https://api.deepseek.com",
+            max_retries=2
+        )
+
+    # --- 3. GOOGLE GEMINI ---
+    elif provider == "gemini":
+        from langchain_google_genai import ChatGoogleGenerativeAI
+        current_key = GeminiKeyManager.get_next_key()
+        return ChatGoogleGenerativeAI(
+            model=os.getenv("GEMINI_MODEL", "gemini-1.5-flash"),
+            temperature=temperature,
+            google_api_key=current_key,
+            max_retries=2
+        )
+
+    # --- 4. OLLAMA ---
+    elif provider == "ollama":
+        from langchain_ollama import ChatOllama
+        return ChatOllama(
+            model=os.getenv("OLLAMA_MODEL", "qwen2.5-coder:7b"),
+            temperature=temperature,
+            base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+        )
+
+    else:
+        raise ValueError(f"❌ Provider '{provider}' chưa được hỗ trợ!")
