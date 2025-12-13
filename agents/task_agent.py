@@ -10,7 +10,9 @@ from mcp_servers.task_service.tools import (
     list_tasks,  # Xem danh sách task
     find_tasks_to_delete,  # Xóa an toàn B1: Tìm kiếm
     execute_delete_tasks_batch,  # Xóa an toàn B2: Xóa thật
-    recommend_assignee  # [MỚI] Gợi ý người thực hiện (Smart Assign)
+    recommend_assignee,  # Gợi ý người thực hiện (Smart Assign)
+    get_project_members,  # Lấy danh sách thành viên (Map Tên -> ID)
+    get_project_forecast  # [MỚI] Dự báo tiến độ & rủi ro
 )
 
 # 2. Import tool tra cứu ID từ Project Service (Để Task Agent tự tìm ID dự án)
@@ -34,14 +36,16 @@ def create_task_agent():
         # --- Nhóm Tra Cứu ---
         get_my_projects_context,
         list_tasks,
-        find_project_context,  # <--- Quan trọng: Giúp Task Agent tự tìm ID dự án
+        find_project_context,  # Quan trọng: Giúp Task Agent tự tìm ID dự án
+        get_project_members,  # Quan trọng: Giúp Task Agent tra cứu ID thành viên
 
         # --- Nhóm Xóa ---
         find_tasks_to_delete,
         execute_delete_tasks_batch,
 
-        # --- Nhóm Thông Minh ---
-        recommend_assignee  # <--- Tool mới vừa thêm
+        # --- Nhóm Thông Minh (Analytics) ---
+        recommend_assignee,
+        get_project_forecast  # <--- Tool mới vừa thêm
     ]
 
     # Thiết lập Prompt

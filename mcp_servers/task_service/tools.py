@@ -447,3 +447,146 @@ def recommend_assignee(project_name: str, title: str, description: str = "", tas
         output_lines.append("---")
 
     return "\n".join(output_lines)
+
+
+# =============================================================================
+# TOOL 9: LẤY DANH SÁCH THÀNH VIÊN (Mapping Tên -> UserID)
+# =============================================================================
+
+class GetProjectMembersInput(BaseModel):
+    project_name: str = Field(description="Tên dự án cần xem thành viên")
+
+
+@tool("get_project_members", args_schema=GetProjectMembersInput)
+def get_project_members(project_name: str):
+    """
+    Lấy danh sách thành viên trong dự án để map từ Tên sang ID.
+    Dùng khi user nói: "Giao task cho [Tên]".
+    """
+    print(f"👥 [Member-Tool] Đang lấy thành viên dự án '{project_name}'...")
+
+    # 1. Map tên dự án sang ID (Công ty/Workspace/Project)
+    project_map = get_project_mapping()
+    ids = project_map.get(project_name.lower().strip())
+
+    if not ids:
+        return f"❌ Lỗi: Không tìm thấy dự án '{project_name}'."
+
+    # 2. Gọi API (Đúng theo ảnh bạn cung cấp)
+    # Endpoint: /api/companies/{companyId}/workspaces/{workspaceId}/projects/{projectId}/members
+    endpoint = f"/api/companies/{ids['company_id']}/workspaces/{ids['workspace_id']}/projects/{ids['project_id']}/members"
+
+    result = api_client.get(endpoint)
+
+    if "error" in result:
+        return f"Lỗi lấy danh sách thành viên: {result.get('details', result['error'])}"
+
+    # 3. Xử lý dữ liệu trả về (Theo mẫu JSON bạn gửi: data -> content)
+    # JSON mẫu: {"data": {"content": [{"userId": 7, "fullName": "..."}]}}
+    data_block = result.get("data", {})
+    members = []
+
+    if isinstance(data_block, dict):
+        members = data_block.get("content", [])
+    elif isinstance(data_block, list):
+        members = data_block  # Trường hợp API trả list trực tiếp
+
+    if not members:
+        return f"Dự án '{project_name}' hiện chưa có thành viên nào."
+
+    # 4. Format kết quả để Agent dễ đọc
+    lines = [f"### DANH SÁCH THÀNH VIÊN DỰ ÁN '{project_name}'"]
+    lines.append(f"(Tổng: {len(members)} thành viên)")
+    lines.append("| UserID | Tên Thành Viên | Email | Vai trò |")
+    lines.append("|--- |--- |--- |---|")
+
+    for m in members:
+        # Lấy thông tin quan trọng
+        u_id = m.get('userId', 'N/A')
+        full_name = m.get('fullName', 'No Name')
+        email = m.get('email', '')
+        role = m.get('roleName', 'Member')
+
+        lines.append(f"| {u_id} | {full_name} | {email} | {role} |")
+
+    lines.append("\n👉 **GHI CHÚ CHO AI:**")
+    lines.append("- Khi user giao task (Assign), hãy dùng **UserID** để điền vào trường `assignee_id`.")
+    lines.append(
+        "- Ví dụ: User nói 'Giao cho Phương', bạn tìm thấy 'Võ Thị Phương' có UserID là 8 -> Gọi create_task(..., assignee_id=8).")
+
+    return "\n".join(lines)
+
+
+# =============================================================================
+# TOOL 10: DỰ BÁO TIẾN ĐỘ & RỦI RO (PROJECT FORECAST)
+# =============================================================================
+
+class ProjectForecastInput(BaseModel):
+    project_name: str = Field(description="Tên dự án cần dự báo tiến độ")
+
+
+@tool("get_project_forecast", args_schema=ProjectForecastInput)
+def get_project_forecast(project_name: str):
+    """
+    Dự báo ngày hoàn thành dự án và cảnh báo rủi ro.
+    """
+    print(f"🔮 [Forecast-Tool] Đang tính toán dự báo cho dự án '{project_name}'...")
+
+    project_map = get_project_mapping()
+    ids = project_map.get(project_name.lower().strip())
+
+    if not ids:
+        return f"❌ Lỗi: Không tìm thấy dự án '{project_name}'."
+
+    endpoint = f"/api/analytics/projects/{ids['project_id']}/forecast"
+    result = api_client.get(endpoint)
+
+    if "error" in result:
+        return f"Lỗi gọi API dự báo: {result.get('details', result['error'])}"
+
+    data = result.get("data", {})
+    if not data:
+        return "Hiện chưa có đủ dữ liệu để dự báo (Cần ít nhất 1 Sprint đã hoàn thành)."
+
+    backlog = data.get('totalBacklogPoints', 0)
+    velocity = data.get('averageVelocity', 0)
+    due_date = data.get('projectDueDate', 'N/A')
+    risk_level = data.get('riskLevel', 'LOW')
+    risk_msg = data.get('riskMessage', '')
+
+    opt = data.get('optimistic', {})
+    likely = data.get('likely', {})
+    pess = data.get('pessimistic', {})
+
+    # [FIX] Hàm helper để xử lý text trạng thái -> Tránh lỗi SyntaxError trên Python 3.10
+    def format_status(scenario):
+        if not scenario.get('late'):
+            return "Kịp hạn"
+        return f"Trễ {scenario.get('daysLate')} ngày"
+
+    lines = [f"### 🔮 BÁO CÁO DỰ BÁO TIẾN ĐỘ: {project_name.upper()}"]
+    lines.append(f"- Tổng việc còn lại: {backlog} Points")
+    lines.append(f"- Tốc độ trung bình: {velocity} Points/Sprint")
+    lines.append(f"- Deadline cứng: {due_date}")
+    lines.append(f"- ⚠️ MỨC ĐỘ RỦI RO: {risk_level}")
+    lines.append(f"- Cảnh báo từ hệ thống: '{risk_msg}'")
+    lines.append("-" * 30)
+
+    lines.append("### 📊 3 KỊCH BẢN DỰ KIẾN:")
+
+    # Sử dụng hàm helper đã tạo ở trên
+    lines.append(f"1. ☀️ TỐT NHẤT (Optimistic): Xong ngày {opt.get('completionDate')} "
+                 f"({format_status(opt)}). "
+                 f"(Nếu team cày {opt.get('velocityUsed')} pts/sprint).")
+
+    lines.append(f"2. 🎯 KHẢ THI NHẤT (Likely): Xong ngày {likely.get('completionDate')} "
+                 f"({format_status(likely)}). "
+                 f"(Với tốc độ hiện tại {likely.get('velocityUsed')} pts/sprint).")
+
+    lines.append(f"3. 🌧️ XẤU NHẤT (Pessimistic): Xong ngày {pess.get('completionDate')} "
+                 f"({format_status(pess)}). "
+                 f"(Nếu tốc độ giảm còn {pess.get('velocityUsed')} pts/sprint).")
+
+    lines.append("\n👉 **HƯỚNG DẪN AI:** Dựa vào 3 kịch bản trên để trả lời user một cách khéo léo.")
+
+    return "\n".join(lines)
