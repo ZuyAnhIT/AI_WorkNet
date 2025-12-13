@@ -590,3 +590,88 @@ def get_project_forecast(project_name: str):
     lines.append("\n👉 **HƯỚNG DẪN AI:** Dựa vào 3 kịch bản trên để trả lời user một cách khéo léo.")
 
     return "\n".join(lines)
+
+
+# =============================================================================
+# TOOL 11: DỮ LIỆU HỌP NHANH (DAILY STANDUP)
+# =============================================================================
+class DailyStandupInput(BaseModel):
+    project_name: str = Field(description="Tên dự án cần lấy báo cáo standup")
+
+
+@tool("get_daily_standup", args_schema=DailyStandupInput)
+def get_daily_standup(project_name: str):
+    """
+    Lấy dữ liệu công việc của các thành viên (Đã xong, Đang làm) để phục vụ họp Daily Standup.
+    """
+    print(f"☕ [Standup-Tool] Đang tổng hợp báo cáo nhanh cho dự án '{project_name}'...")
+
+    # 1. Map tên dự án sang ID
+    project_map = get_project_mapping()
+    ids = project_map.get(project_name.lower().strip())
+
+    if not ids:
+        return f"❌ Lỗi: Không tìm thấy dự án '{project_name}'."
+
+    # 2. Gọi API Standup
+    endpoint = f"/api/analytics/projects/{ids['project_id']}/daily-standup"
+    result = api_client.get(endpoint)
+
+    if "error" in result:
+        return f"Lỗi lấy dữ liệu Standup: {result.get('details', result['error'])}"
+
+    # 3. [FIX QUAN TRỌNG] Bóc tách đúng lớp "data" trong JSON
+    # API trả về: { "success": true, "data": { ... } }
+    real_data = result.get("data", {})
+
+    # Kiểm tra kỹ nếu real_data rỗng
+    if not real_data:
+        return "Không có dữ liệu standup nào trong Sprint hiện tại (Backend trả về data rỗng)."
+
+    sprint = real_data.get('sprintName', 'Unknown Sprint')
+    date = real_data.get('reportDate', 'Today')
+    members = real_data.get('members', [])
+
+    if not members:
+        return f"Dự án '{project_name}' hiện chưa có thành viên nào hoạt động trong Sprint này."
+
+    # 4. Format văn bản
+    lines = [f"### ☕ BÁO CÁO DAILY STANDUP: {project_name.upper()}"]
+    lines.append(f"📅 Ngày: {date} | 🏃 {sprint}")
+    lines.append("-" * 30)
+
+    for m in members:
+        name = m.get('fullName', 'Unknown')
+        done = m.get('completedTasks', [])
+        doing = m.get('inProgressTasks', [])
+        todo = m.get('todoTasks', [])
+
+        lines.append(f"👤 **{name}**:")
+
+        # Phần Đã Xong
+        if done:
+            lines.append(f"   ✅ Đã xong: {', '.join(done)}")
+        else:
+            # Nếu không có task xong, báo cáo nhẹ nhàng
+            pass
+
+            # Phần Đang Làm (Quan trọng nhất)
+        if doing:
+            lines.append(f"   🚧 Đang làm: {', '.join(doing)}")
+        elif not done:
+            lines.append("   ⚠️ Chưa có task nào đang chạy.")
+
+        # Phần Sắp tới
+        if todo:
+            # Chỉ hiển thị tối đa 2 task todo để đỡ dài
+            lines.append(f"   📋 Sắp tới: {', '.join(todo[:2])}...")
+
+        lines.append("")  # Dòng trống
+
+    lines.append("-" * 30)
+    lines.append("👉 **HƯỚNG DẪN AI:**")
+    lines.append("- Tóm tắt tình hình team dựa trên dữ liệu trên.")
+    lines.append("- Nếu ai đang làm (🚧) task quan trọng (VD: Fix bug, Integrate Payment), hãy nhắc đến.")
+    lines.append("- Đừng chỉ liệt kê, hãy kể chuyện tự nhiên.")
+
+    return "\n".join(lines)
