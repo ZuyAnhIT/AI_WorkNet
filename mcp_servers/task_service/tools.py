@@ -3,13 +3,29 @@ import os
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 from typing import Optional, List
-from datetime import datetime
+from typing import Optional
+from langchain.tools import tool
+from pydantic import BaseModel, Field
 from .api_client import api_client
+from datetime import datetime
 
 
 # =============================================================================
 # 1. CÁC HÀM PHỤ TRỢ (INTERNAL HELPERS)
 # =============================================================================
+
+# --- HÀM PHỤ TRỢ ---
+def convert_date_to_iso(date_str):
+    """Chuyển đổi ngày tháng user nhập về ISO 8601."""
+    if not date_str or str(date_str).lower() == 'nan': return None
+    # Thử các định dạng ngày phổ biến ở VN
+    for fmt in ["%d/%m/%Y", "%d-%m-%Y", "%Y-%m-%d", "%d.%m.%Y"]:
+        try:
+            # Lưu ý: Thêm giờ cố định 17:00 (Cuối ngày làm việc) để tránh bị trôi sang ngày hôm trước do múi giờ
+            return datetime.strptime(str(date_str), fmt).strftime("%Y-%m-%dT17:00:00.000Z")
+        except:
+            continue
+    return str(date_str)
 
 def get_project_mapping():
     """Lấy danh sách dự án để tra cứu ID."""
@@ -61,37 +77,73 @@ def get_my_projects_context():
     return "\n".join(lines) if lines else "Không có dự án."
 
 
-# --- TOOL 2: TẠO TASK THỦ CÔNG (1 TASK) ---
+
+# --- TOOL TẠO TASK (ĐÃ CẬP NHẬT) ---
+def convert_date_to_iso(date_str):
+    if not date_str or str(date_str).lower() == 'nan': return None
+    for fmt in ["%d/%m/%Y", "%d-%m-%Y", "%Y-%m-%d", "%d.%m.%Y"]:
+        try:
+            return datetime.strptime(str(date_str), fmt).strftime("%Y-%m-%dT17:00:00.000Z")
+        except:
+            continue
+    return str(date_str)
+
+
+# --- CẬP NHẬT TOOL CREATE TASK ---
 class CreateTaskInput(BaseModel):
-    title: str = Field(description="Tiêu đề")
-    description: str = Field(description="Mô tả")
+    title: str = Field(description="Tiêu đề task")
+    description: str = Field(description="Mô tả chi tiết")
     company_id: int = Field(description="ID Công ty")
     workspace_id: int = Field(description="ID Workspace")
     project_id: int = Field(description="ID Dự án")
-    due_date: str = Field(description="Hạn chót")
-    priority: str = Field(description="Priority", default="LOW")
+
+    # Optional fields
+    due_date: Optional[str] = Field(default=None, description="Hạn chót (dd/mm/yyyy)")
+    priority: str = Field(default="LOW", description="LOW, MEDIUM, HIGH")
     assignee_id: Optional[int] = Field(default=None)
     sprint_id: Optional[int] = Field(default=None)
     epic_id: Optional[int] = Field(default=None)
+    story_points: Optional[int] = Field(default=None)
 
 
 @tool("create_task", args_schema=CreateTaskInput)
-def create_task(title: str, description: str, company_id: int, workspace_id: int, project_id: int, due_date: str,
-                priority: str = "LOW", assignee_id: int = None, sprint_id: int = None, epic_id: int = None):
-    """Tạo 1 Task lẻ."""
+def create_task(
+        title: str, description: str,
+        company_id: int, workspace_id: int, project_id: int,
+        due_date: str = None, priority: str = "LOW",
+        assignee_id: int = None, sprint_id: int = None, epic_id: int = None, story_points: int = None
+):
+    """Tạo task mới."""
     final_due_date = convert_date_to_iso(due_date)
+    final_priority = priority.upper() if priority else "LOW"
+
     endpoint = f"/api/companies/{company_id}/workspaces/{workspace_id}/projects/{project_id}/tasks"
+
     payload = {
         "title": title, "description": description, "taskType": "STORY",
-        "priority": priority, "storyPoints": 0, "dueDate": final_due_date,
-        "sprintId": sprint_id, "epicId": epic_id, "assigneeId": assignee_id
+        "priority": final_priority, "dueDate": final_due_date,
+        "storyPoints": story_points, "sprintId": sprint_id, "epicId": epic_id, "assigneeId": assignee_id
     }
-    print(f"🔨 [Task-Tool] Tạo Task '{title}'...")
+
+    print(f"🔨 [Task-Tool] Tạo Task '{title}' -> Project {project_id}...")
+
     result = api_client.post(endpoint, payload)
-    if "error" in result: return f"Thất bại: {result.get('details', result['error'])}"
-    return f"Thành công! Kết quả: {result}"
 
+    # --- BẮT LỖI CỤ THỂ TỪ BACKEND ---
+    if "error" in result:
+        err_msg = str(result.get('message') or result.get('details') or result.get('error'))
 
+        # Lỗi chưa cấu hình Board (Nguyên nhân gây 404 và Timeout)
+        if "no status board configuration" in err_msg.lower():
+            return (
+                f"⛔ LỖI NGHIỆP VỤ: Dự án (ID {project_id}) chưa được cấu hình Bảng trạng thái (Kanban Board).\n"
+                f"👉 Vui lòng vào Web để tạo Board/Column cho dự án này trước khi thêm Task."
+            )
+
+        return f"❌ Thất bại: {err_msg}"
+
+    data = result.get("data", {})
+    return f"✅ Tạo thành công! Task ID: {data.get('id')} | Title: {data.get('title')}"
 # --- TOOL 3: XỬ LÝ EXCEL (BATCH FILE) ---
 class ExcelInput(BaseModel):
     file_path: str = Field(description="Đường dẫn file Excel")
@@ -390,66 +442,76 @@ def execute_delete_tasks_batch(target_project_name: str, task_ids: List[int]):
 
     return f"### KẾT QUẢ XÓA:\nThành công: {success_count}/{len(task_ids)}\n{chr(10).join(results)}"
 
-
+# --- TOOL SMART ASSIGN (ĐÚNG SPEC API) ---
 class RecommendAssigneeInput(BaseModel):
-    project_name: str = Field(description="Tên dự án")
+    project_id: int = Field(description="ID của dự án (Bắt buộc phải là số thực tế đã tra cứu)")
     title: str = Field(description="Tiêu đề task")
-    description: Optional[str] = Field(description="Mô tả chi tiết (nếu có)", default="")  # <--- THÊM
-    task_type: Optional[str] = Field(description="Loại task: 'STORY' hoặc 'BUG'", default="STORY")
-    tags: Optional[List[str]] = Field(description="Danh sách thẻ/keyword (VD: ['java', 'backend'])",
-                                      default=[])  # <--- THÊM
-    story_points: Optional[int] = Field(description="Độ khó ước lượng", default=3)
+    task_type: str = Field(description="Loại task: 'STORY' hoặc 'BUG'", default="STORY")
+    tags: List[str] = Field(description="Danh sách từ khóa", default=[])
+    story_points: int = Field(description="Độ khó ước lượng", default=3)
+    description: str = Field(description="Mô tả thêm", default="")
 
 
 @tool("recommend_assignee", args_schema=RecommendAssigneeInput)
-def recommend_assignee(project_name: str, title: str, description: str = "", task_type: str = "STORY",
-                       tags: List[str] = [], story_points: int = 3):
+def recommend_assignee(project_id: int, title: str, task_type: str = "STORY", tags: List[str] = [],
+                       story_points: int = 3, description: str = ""):
     """
-    Phân tích và gợi ý nhân sự phù hợp nhất cho task.
+    Gợi ý nhân sự (Smart Assign) dựa trên ID dự án.
     """
-    print(f"🧠 [Smart-Tool] Phân tích ứng viên: {title} (Tags: {tags})...")
+    print(f"🧠 [Smart-Tool] Đang phân tích ứng viên cho Project ID: {project_id}, Task: '{title}'...")
 
-    # 1. Lấy ID dự án
-    project_map = get_project_mapping()
-    ids = project_map.get(project_name.lower().strip())
-    if not ids: return f"❌ Lỗi: Không tìm thấy dự án '{project_name}'."
-    project_id = ids['project_id']
+    try:
+        # 1. Chuẩn bị Payload
+        final_tags = tags
+        if not final_tags:
+            ignore = ["fix", "lỗi", "bug", "task", "làm", "tạo", "cho", "cần"]
+            final_tags = [w for w in title.split() if w.lower() not in ignore and len(w) > 2]
 
-    # 2. Gọi API Analytics (Cập nhật payload đầy đủ)
-    endpoint = f"/api/analytics/projects/{project_id}/recommend-assignee"
+        payload = {
+            "title": title,
+            "description": description or title,
+            "taskType": task_type.upper(),
+            "tags": final_tags,
+            "storyPoints": story_points
+        }
 
-    payload = {
-        "title": title,
-        "description": description,  # <--- Gửi thêm Description
-        "taskType": task_type.upper(),
-        "tags": tags,  # <--- Gửi thêm Tags
-        "storyPoints": story_points
-    }
+        # 2. GỌI API (Có Try/Except an toàn)
+        endpoint = f"/api/analytics/projects/{project_id}/recommend-assignee"
 
-    # Debug xem Payload gửi đi có đúng ý bạn không
-    # print(f"DEBUG PAYLOAD: {payload}")
+        try:
+            result = api_client.post(endpoint, payload)
+        except Exception as api_err:
+            print(f"❌ [API Connect Error]: {api_err}")
+            return "⚠️ Không thể kết nối tới hệ thống phân tích (Backend Error). Vui lòng thử lại."
 
-    result = api_client.post(endpoint, payload)
+        if isinstance(result, dict) and ("error" in result or result.get("status", 200) >= 400):
+            err_msg = result.get("details") or result.get("message") or result.get("error")
+            return f"⚠️ Backend trả về lỗi: {err_msg}"
 
-    if "error" in result:
-        return f"Lỗi AI phân tích: {result.get('details', result['error'])}"
+        # 3. Xử lý kết quả
+        candidates = result if isinstance(result, list) else result.get("data", [])
 
-    # 3. Xử lý kết quả (Giữ nguyên logic hiển thị cũ)
-    candidates = result if isinstance(result, list) else result.get("data", [])
-    if not candidates: return "Không tìm thấy ứng viên phù hợp."
+        if not candidates:
+            return "⚠️ Không tìm thấy ứng viên phù hợp trong dự án này."
 
-    output_lines = [f"### KẾT QUẢ ĐỀ XUẤT CHO: '{title}'"]
-    if tags: output_lines.append(f"(Tags: {', '.join(tags)})")
+        output = [f"### 🤖 KẾT QUẢ PHÂN TÍCH (Project ID: {project_id})"]
+        for c in candidates:
+            name = c.get('fullName', 'Unknown')
+            score = c.get('matchScore', 0)
+            reason = c.get('reason', 'N/A')
+            status = c.get('workloadStatus', 'NORMAL')
 
-    for idx, c in enumerate(candidates, 1):
-        output_lines.append(f"{'🥇' if idx == 1 else '🥈'} **{c.get('fullName')}** (Score: {c.get('matchScore')})")
-        output_lines.append(f"   - Lý do: {c.get('reason')}")
-        output_lines.append("---")
+            icon = "🟢" if status == "LOW" else "🔴 QUÁ TẢI" if status == "OVERLOADED" else "🟠"
 
-    return "\n".join(output_lines)
+            output.append(f"- **{name}** (Score: {score}) {icon}")
+            output.append(f"  Lý do: {reason}")
+            output.append("---")
 
+        return "\n".join(output)
 
-# =============================================================================
+    except Exception as e:
+        return f"⛔ Lỗi không xác định tại Tool: {str(e)}"
+#=============================================================================
 # TOOL 9: LẤY DANH SÁCH THÀNH VIÊN (Mapping Tên -> UserID)
 # =============================================================================
 
