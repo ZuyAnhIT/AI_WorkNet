@@ -34,6 +34,7 @@ def task_node(state: AgentState):
 
 
 def general_node(state: AgentState):
+    """Xử lý General - Chào hỏi, ngày giờ"""
     response = general_agent_model.invoke({"messages": state["messages"]})
     return {"messages": [response]}
 
@@ -45,17 +46,28 @@ def supervisor_node(state: AgentState):
     messages = state["messages"]
     last_user_msg = messages[-1]
 
+    # Chuẩn hóa input người dùng
+    user_text = str(last_user_msg.content).lower()
+
     if not isinstance(last_user_msg, HumanMessage):
         return {"next": "END"}
 
-    # --- A. LOGIC GHIM LUỒNG (STICKY ROUTING) ---
+    # --- A. LOGIC GHIM LUỒNG (STICKY ROUTING) - QUAN TRỌNG ---
     if len(messages) >= 2:
         last_ai_msg = messages[-2]
         if isinstance(last_ai_msg, AIMessage):
             ai_text = str(last_ai_msg.content).lower()
-            keywords_confirm = ["xác nhận", "thực hiện không", "đồng ý", "chắc chắn", "bảng dưới đây", "muốn xóa"]
 
+            # [FIX 1]: Nếu AI vừa liệt kê "Thông tin dự án" -> Câu tiếp theo chắc chắn là xử lý Dự án
+            # Giúp sửa lỗi: User nói "sửa trạng thái" bị router đá sang Task_Agent
+            if "thông tin dự án" in ai_text or "mã dự án" in ai_text or "project code" in ai_text:
+                print(f"\n[ROUTER STICKY] Context là Project Info -> Giữ tại Project_Agent")
+                return {"next": "Project_Agent"}
+
+            # [FIX 2]: Logic xác nhận hành động (Confirm)
+            keywords_confirm = ["xác nhận", "thực hiện không", "đồng ý", "chắc chắn", "bảng dưới đây", "muốn xóa"]
             if any(k in ai_text for k in keywords_confirm):
+                print(f"\n[ROUTER STICKY] AI đang chờ xác nhận...")
                 # Ưu tiên Task Agent nếu có từ khóa liên quan task
                 if any(x in ai_text for x in ["task", "excel", "công việc", "id:"]):
                     return {"next": "Task_Agent"}
@@ -71,7 +83,7 @@ def supervisor_node(state: AgentState):
         content = m.content if isinstance(m.content, str) else str(m.content)
         history_str += f"- {role}: {content[:150]}...\n"
 
-    # [FIX]: Dùng model riêng cho Supervisor, KHÔNG bind bất kỳ tool nào vào đây
+    # Dùng model riêng cho Supervisor
     llm = get_llm(temperature=0, role="supervisor")
 
     router_prompt = (
@@ -86,17 +98,17 @@ def supervisor_node(state: AgentState):
         "QUYẾT ĐỊNH:"
     )
 
-    # Invoke LLM (Đảm bảo không bị lẫn lộn tool call ở bước này)
     result = llm.invoke(router_prompt).content.strip()
     print(f"\n[ROUTER AI] Deep Context -> Selected: {result}")
 
-    # [FIX]: So khớp chuỗi chặt chẽ hơn
-    if "Task" in result:
-        return {"next": "Task_Agent"}
-    if "Project" in result:
-        return {"next": "Project_Agent"}
-    if "General" in result:
-        return {"next": "General_Agent"}
+    # So khớp chuỗi kết quả
+    if "Task" in result: return {"next": "Task_Agent"}
+    if "Project" in result: return {"next": "Project_Agent"}
+    if "General" in result: return {"next": "General_Agent"}
+
+    # Fallback thủ công nếu AI Router trả về linh tinh nhưng user có ý định rõ ràng
+    if "dự án" in user_text or "project" in user_text: return {"next": "Project_Agent"}
+    if "task" in user_text or "công việc" in user_text: return {"next": "Task_Agent"}
 
     return {"next": "General_Agent"}  # Mặc định
 
@@ -132,7 +144,6 @@ workflow.add_conditional_edges(
 
 # Vòng lặp Tool Call cho Project_Agent
 def project_cond(state):
-    # CHỈ chuyển sang project_tools nếu có tool_calls
     last_msg = state["messages"][-1]
     if hasattr(last_msg, "tool_calls") and last_msg.tool_calls:
         return "project_tools"

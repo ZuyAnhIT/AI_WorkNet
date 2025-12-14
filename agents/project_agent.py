@@ -9,7 +9,6 @@ from mcp_servers.project_service.tools import (
     get_project_details,
     get_user_profile,
     get_current_date,
-    find_project_context,
     lookup_hierarchy,
     get_workspace_projects,
     get_company_workspaces  # <--- [MỚI] Tool lấy danh sách Workspace theo Company ID
@@ -37,7 +36,6 @@ def create_project_agent():
         get_current_date,
 
         # 3. Nhóm tra cứu & Danh sách
-        find_project_context,   # Tìm 1 dự án
         lookup_hierarchy,       # Tìm nơi tạo dự án (ID Company/Workspace)
         get_workspace_projects, # Lấy danh sách dự án trong Workspace
         get_company_workspaces  # <--- [MỚI] Dùng để mapping tên Workspace sang ID chính xác
