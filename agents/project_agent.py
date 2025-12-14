@@ -3,19 +3,19 @@ from utils.llm_factory import get_llm
 
 # --- IMPORT CÁC TOOL CỦA PROJECT SERVICE ---
 from mcp_servers.project_service.tools import (
-    create_project,       # Tạo dự án
-    update_project,       # Cập nhật dự án
-    delete_project,       # Xóa dự án
-    get_project_details,  # Xem chi tiết
-    get_user_profile,     # Xem profile chung (để lấy ID Company/Workspace)
-    get_current_date,     # Lấy ngày giờ
-    find_project_context, # Tra cứu ID dự án từ tên
-    lookup_hierarchy,     # Tra cứu ID Công ty/Workspace (cho việc tạo dự án)
-    get_workspace_projects # <--- [MỚI] Tool lấy danh sách dự án đầy đủ
+    create_project,
+    update_project,
+    delete_project,
+    get_project_details,
+    get_user_profile,
+    get_current_date,
+    find_project_context,
+    lookup_hierarchy,
+    get_workspace_projects,
+    get_company_workspaces  # <--- [MỚI] Tool lấy danh sách Workspace theo Company ID
 )
 
-# Import Prompt (Lấy từ file __init
-# __.py như cấu trúc cũ bạn đang giữ)
+# Import Prompt
 from orchestrator.prompts import PROJECT_AGENT_SYSTEM_PROMPT
 
 
@@ -24,7 +24,7 @@ def create_project_agent():
     llm = get_llm(temperature=0)
 
     # --- ĐĂNG KÝ DANH SÁCH TOOL ---
-    # Agent sẽ được phép sử dụng tất cả 9 công cụ này
+    # Agent sẽ được phép sử dụng tất cả 10 công cụ này
     tools = [
         # 1. Nhóm thao tác (CRUD)
         create_project,
@@ -37,18 +37,20 @@ def create_project_agent():
         get_current_date,
 
         # 3. Nhóm tra cứu & Danh sách
-        find_project_context,  # Tìm 1 dự án
-        lookup_hierarchy,      # Tìm nơi tạo dự án
-        get_workspace_projects # <--- [QUAN TRỌNG] Lấy danh sách dự án (Fix lỗi thiếu data)
+        find_project_context,   # Tìm 1 dự án
+        lookup_hierarchy,       # Tìm nơi tạo dự án (ID Company/Workspace)
+        get_workspace_projects, # Lấy danh sách dự án trong Workspace
+        get_company_workspaces  # <--- [MỚI] Dùng để mapping tên Workspace sang ID chính xác
     ]
 
-    # Thiết lập Prompt
+    # Thiết lập Prompt (Lưu ý: Bạn phải cập nhật PROJECT_AGENT_SYSTEM_PROMPT để ép Agent dùng tool này)
     prompt = ChatPromptTemplate.from_messages([
         ("system", PROJECT_AGENT_SYSTEM_PROMPT),
         MessagesPlaceholder(variable_name="messages"),
     ])
 
     # Gắn tool vào Agent
+    # Model llama-3.3-70b-versatile sẽ hoạt động rất tốt với danh sách tool này
     agent = prompt | llm.bind_tools(tools)
 
     return agent, tools
