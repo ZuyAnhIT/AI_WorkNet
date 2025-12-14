@@ -240,28 +240,79 @@ def get_project_details(company_id: int, workspace_id: int, project_id: int):
     """
 
 
+from typing import Optional
+from langchain.tools import tool
+from pydantic import BaseModel, Field
+
+
 # =============================================================================
-# TOOL 7: CẬP NHẬT DỰ ÁN
+# TOOL 7: CẬP NHẬT DỰ ÁN (FULL SCHEMA)
 # =============================================================================
+
 class UpdateProjectInput(BaseModel):
+    # 1. Path Params
     company_id: int = Field(description="ID công ty")
     workspace_id: int = Field(description="ID workspace")
     project_id: int = Field(description="ID dự án")
-    name: Optional[str] = Field(default=None)
-    description: Optional[str] = Field(default=None)
-    status: Optional[str] = Field(default=None)
+
+    # 2. Body Params (Full options from Backend JSON)
+    name: Optional[str] = Field(default=None, description="Tên dự án")
+    project_code: Optional[str] = Field(default=None, description="Mã dự án (projectCode)")
+    description: Optional[str] = Field(default=None, description="Mô tả")
+    goal: Optional[str] = Field(default=None, description="Mục tiêu")
+    priority: Optional[str] = Field(default=None, description="Priority (LOW, MEDIUM, HIGH)")
+
+    start_date: Optional[str] = Field(default=None, description="Ngày bắt đầu (YYYY-MM-DD)")
+    due_date: Optional[str] = Field(default=None, description="Ngày kết thúc dự kiến (YYYY-MM-DD)")
+    completed_at: Optional[str] = Field(default=None,
+                                        description="Ngày hoàn thành thực tế (YYYY-MM-DD). Điền vào để đóng dự án.")
+
+    manager_id: Optional[int] = Field(default=None, description="ID người quản lý")
+    board_config: Optional[str] = Field(default=None, description="Cấu hình Board (JSON string)")
+    cover_image_url: Optional[str] = Field(default=None, description="URL ảnh bìa")
+    project_type_id: Optional[int] = Field(default=None, description="ID loại dự án")
 
 
 @tool("update_project", args_schema=UpdateProjectInput)
-def update_project(company_id: int, workspace_id: int, project_id: int, name: str = None, description: str = None,
-                   status: str = None):
-    """Cập nhật dự án."""
+def update_project(
+        company_id: int, workspace_id: int, project_id: int,
+        name: str = None, project_code: str = None, description: str = None, goal: str = None,
+        priority: str = None, start_date: str = None, due_date: str = None, completed_at: str = None,
+        manager_id: int = None, board_config: str = None, cover_image_url: str = None, project_type_id: int = None
+):
+    """
+    Cập nhật toàn bộ thông tin dự án.
+    Hỗ trợ sửa: Tên, Mã, Mô tả, Mục tiêu, Priority, Các loại ngày tháng, Config, Manager...
+    """
     endpoint = f"/api/companies/{company_id}/workspaces/{workspace_id}/projects/{project_id}"
-    # (Giản lược payload để code ngắn gọn, logic như cũ)
-    print(f"✏️ [Tool] Update Project ID {project_id}...")
-    return "Cập nhật thành công (Demo)."
 
+    # Mapping chính xác Python snake_case -> API camelCase
+    payload = {}
+    if name: payload["name"] = name
+    if project_code: payload["projectCode"] = project_code
+    if description: payload["description"] = description
+    if goal: payload["goal"] = goal
+    if priority: payload["priority"] = priority
+    if start_date: payload["startDate"] = start_date
+    if due_date: payload["dueDate"] = due_date
+    if completed_at: payload["completedAt"] = completed_at
+    if manager_id: payload["managerId"] = manager_id
+    if board_config: payload["boardConfig"] = board_config
+    if cover_image_url: payload["coverImageUrl"] = cover_image_url
+    if project_type_id: payload["projectTypeId"] = project_type_id
 
+    if not payload:
+        return "⚠️ Bạn chưa nhập thông tin nào cần chỉnh sửa."
+
+    print(f"✏️ [Tool] Đang cập nhật Project ID {project_id} (Multipart)...")
+
+    # Gửi Multipart để tránh lỗi 415
+    result = api_client.put_multipart(endpoint, payload)
+
+    if "error" in result:
+        return f"❌ Cập nhật thất bại: {result.get('details', result['error'])}"
+
+    return f"✅ Cập nhật thành công! Các trường đã lưu: {', '.join(payload.keys())}"
 # =============================================================================
 # TOOL 8: TRA CỨU ID CÔNG TY & WORKSPACE (Dùng để TẠO DỰ ÁN)
 # =============================================================================
