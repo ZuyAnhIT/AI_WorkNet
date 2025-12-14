@@ -1,53 +1,63 @@
+# agents/task_agent.py
+
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from utils.llm_factory import get_llm
+from orchestrator.prompts.task import TASK_AGENT_SYSTEM_PROMPT
 
-# 1. Import các tool của Task Service
+# 1. IMPORT TOOL TỪ TASK SERVICE (File tools.py bạn vừa gửi)
 from mcp_servers.task_service.tools import (
     create_task,  # Tạo 1 task
-    get_my_projects_context,  # Tra cứu ngữ cảnh (Cũ)
+    get_my_projects_context,  # Lấy ngữ cảnh nhanh
     create_tasks_from_excel,  # Tạo từ Excel
-    create_tasks_batch,  # Tạo từ Text Batch
-    list_tasks,  # Xem danh sách task
-    find_tasks_to_delete,  # Xóa an toàn B1: Tìm kiếm
-    execute_delete_tasks_batch,  # Xóa an toàn B2: Xóa thật
-    recommend_assignee,  # Gợi ý người thực hiện (Smart Assign)
-    get_project_members,  # Lấy danh sách thành viên (Map Tên -> ID)
-    get_project_forecast,  # Dự báo tiến độ & rủi ro
-    get_daily_standup  # [MỚI] Báo cáo họp nhanh (Daily Standup)
+    create_tasks_batch,  # Tạo từ Text
+    list_tasks,  # Xem danh sách
+    find_tasks_to_delete,  # Tìm task để xóa
+    execute_delete_tasks_batch,  # Xóa task
+    recommend_assignee,  # Gợi ý người làm
+    get_project_members,  # Lấy thành viên
+    get_project_forecast,  # Dự báo
+    get_daily_standup  # Họp nhanh
 )
 
-# 2. Import tool tra cứu ID từ Project Service (Để Task Agent tự tìm ID dự án)
-from mcp_servers.project_service.tools import find_project_context
-
-from orchestrator.prompts import TASK_AGENT_SYSTEM_PROMPT
+# 2. IMPORT TOOL TỪ PROJECT SERVICE (BẮT BUỘC ĐỂ ĐIỀU HƯỚNG)
+from mcp_servers.project_service.tools import (
+    get_user_profile,  # Lấy CompanyID
+    get_company_workspaces,  # Lấy WorkspaceID
+    get_workspace_projects,  # <--- QUAN TRỌNG: Dùng để lấy danh sách dự án -> Tự tìm ID
+    get_project_details  # Check chi tiết
+)
 
 
 def create_task_agent():
-    # Khởi tạo LLM
+    # Khởi tạo LLM (Temperature=0 để đảm bảo tính chính xác)
     llm = get_llm(temperature=0)
 
-    # --- ĐĂNG KÝ DANH SÁCH TOOL ---
-    # Agent sẽ được phép sử dụng tất cả các công cụ này
+    # 3. ĐĂNG KÝ DANH SÁCH TOOL (WHITELIST)
     tools = [
-        # --- Nhóm Tạo ---
+        # --- NHÓM 1: ĐIỀU HƯỚNG & TÌM KIẾM (Project Tools) ---
+        get_user_profile,
+        get_company_workspaces,
+        get_workspace_projects,  # AI dùng tool này để lấy list dự án, sau đó tự lọc ra ID
+        get_project_details,
+        get_my_projects_context,
+
+        # --- NHÓM 2: TẠO & QUẢN LÝ TASK (Task Tools) ---
         create_task,
+        list_tasks,
+
+        # --- NHÓM 3: BATCH & EXCEL ---
         create_tasks_from_excel,
         create_tasks_batch,
 
-        # --- Nhóm Tra Cứu ---
-        get_my_projects_context,
-        list_tasks,
-        find_project_context,  # Quan trọng: Giúp Task Agent tự tìm ID dự án
-        get_project_members,  # Quan trọng: Giúp Task Agent tra cứu ID thành viên
-
-        # --- Nhóm Xóa ---
+        # --- NHÓM 4: XÓA TASK ---
         find_tasks_to_delete,
         execute_delete_tasks_batch,
 
-        # --- Nhóm Thông Minh (Analytics) ---
+        # --- NHÓM 5: THÔNG MINH (ANALYTICS) ---
         recommend_assignee,
+        get_project_members,
         get_project_forecast,
-        get_daily_standup  # <--- Tool mới vừa thêm
+        get_daily_standup
     ]
 
     # Thiết lập Prompt
