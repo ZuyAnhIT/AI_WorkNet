@@ -5,60 +5,66 @@ from typing import Optional, List
 from .api_client import api_client
 from enum import Enum
 from urllib.parse import urlencode
+from typing import Union
 # =============================================================================
-# HELPER: MAPPING DỮ LIỆU (Đã nâng cấp để lấy TÊN)
+# HELPER: MAPPING DỮ LIỆU (Định nghĩa hàm này để Tool gọi được)
 # =============================================================================
 def fetch_project_mapping():
-    """Hàm nội bộ để lấy danh sách dự án và map ID + NAME."""
-    print("🔍 [Internal] Đang tải danh sách dự án từ /api/users/me...")
+    """Hàm nội bộ để lấy danh sách dự án và bóc tách dữ liệu từ API /me"""
+    print("🔍 [Internal] Đang bóc tách dữ liệu từ /api/users/me...")
 
+    # Giả sử bạn đang dùng api_client đã cấu hình sẵn
+    # Nếu chưa có, bạn cần import api_client từ utils của bạn
     result = api_client.get("/api/users/me")
 
     if "error" in result:
         return {"error": result['error']}
 
     data = result.get("data", {})
-    if not data: return {"error": "Không có dữ liệu User."}
+    if not data:
+        return {"error": "Không tìm thấy dữ liệu hồ sơ."}
 
-    # 1. Map WorkspaceID -> Tên Workspace & CompanyID
-    # Tạo dictionary để tra cứu nhanh tên Workspace
-    ws_name_map = {
-        ws['workspaceId']: ws.get('workspaceName', 'Unknown WS')
-        for ws in data.get('workspaceMemberships', [])
-    }
+    return data
+# =============================================================================
+# TOOL: TRA CỨU THÔNG TIN USER & CÔNG TY (Bóc tách từ /api/users/me)
+# =============================================================================
+@tool("get_user_profile")
+def get_user_profile():
+    """
+    Lấy danh sách Công ty và Workspace THẬT của người dùng.
+    BẮT BUỘC gọi tool này trước khi yêu cầu người dùng chọn nơi tạo dự án.
+    """
+    print("🔍 [Internal] Đang bóc tách dữ liệu từ /api/users/me...")
 
-    # Tạo dictionary để tra cứu Workspace thuộc Company nào
-    ws_to_company_id = {
-        ws['workspaceId']: ws.get('companyId')
-        for ws in data.get('workspaceMemberships', [])
-    }
+    # Gọi API thực tế
+    result = api_client.get("/api/users/me")
 
-    # 2. Map CompanyID -> Tên Company
-    comp_name_map = {
-        c['companyId']: c.get('companyName', 'Unknown Company')
-        for c in data.get('companyMemberships', [])
-    }
+    if "error" in result:
+        return f"⚠️ HỆ THỐNG: Lỗi kết nối API: {result['error']}"
 
-    projects = []
-    # 3. Duyệt qua danh sách dự án và gắn tên vào
-    for p in data.get("projectMemberships", []):
-        w_id = p['workspaceId']
-        c_id = ws_to_company_id.get(w_id, 0)  # Lấy Company ID dựa trên Workspace
+    data = result.get("data", {})
+    if not data:
+        return "⚠️ HỆ THỐNG: Không tìm thấy dữ liệu hồ sơ người dùng."
 
-        projects.append({
-            "name": p['projectName'],
-            "project_id": p['projectId'],
-            "project_code": p.get('projectCode', ''),  # Lấy mã dự án
+    # 1. Bóc tách danh sách Công ty (companyMemberships)
+    companies = data.get("companyMemberships", [])
 
-            "workspace_id": w_id,
-            "workspace_name": ws_name_map.get(w_id, "Unknown Workspace"),
+    if not companies:
+        return "⚠️ HỆ THỐNG: Tài khoản của bạn hiện không thuộc bất kỳ công ty nào."
 
-            "company_id": c_id,
-            "company_name": comp_name_map.get(c_id, "Unknown Company")
-        })
+    # 2. Xây dựng văn bản phản hồi (Plain Text) để chống ảo giác 100%
+    # AI sẽ đọc văn bản này và hiển thị chính xác tên công ty có trong danh sách
+    output = "DANH SÁCH DỮ LIỆU THỰC TẾ TỪ HỆ THỐNG (CẤM BỊA ĐẶT):\n"
 
-    return {"projects": projects}
+    for idx, comp in enumerate(companies, 1):
+        c_name = comp.get("companyName", "Unknown Company")
+        c_id = comp.get("companyId")
+        role = comp.get("roleCode", "N/A")
 
+        # Format rõ ràng để AI lấy được cả Tên và ID
+        output += f"{idx}. CÔNG TY: {c_name} | ID: {c_id} | VAI TRÒ: {role}\n"
+
+    return output
 
 # =============================================================================
 # TOOL 1: TRA CỨU CONTEXT (FINAL VERSION)
@@ -134,22 +140,6 @@ def get_current_date():
     now = datetime.now()
     return f"Hôm nay là: {now.strftime('%Y-%m-%d')} (Thứ {now.strftime('%A')})"
 
-
-# =============================================================================
-# TOOL 3: TRA CỨU TỔNG QUAN (USER PROFILE)
-# =============================================================================
-@tool("get_user_profile")
-def get_user_profile():
-    """Lấy thông tin tổng quan User (Dùng để xem danh sách nếu chưa biết tên dự án)."""
-    data = fetch_project_mapping()  # Tái sử dụng hàm helper
-    if "error" in data: return data["error"]
-
-    projects = data["projects"]
-    lines = [f"- {p['name']} (ID: {p['project_id']})" for p in projects]
-
-    return f"DANH SÁCH DỰ ÁN CỦA BẠN:\n{chr(10).join(lines)}"
-
-
 # =============================================================================
 # TOOL 4: TẠO DỰ ÁN
 # =============================================================================
@@ -170,16 +160,32 @@ def create_project(name: str, code: str, description: str, company_id: int, work
                    due_date: str, priority: str, goal: str):
     """Tạo Project mới."""
     endpoint = f"/api/companies/{company_id}/workspaces/{workspace_id}/projects"
-    payload = {
-        "name": name, "projectCode": code, "description": description,
-        "startDate": start_date, "dueDate": due_date, "priority": priority, "goal": goal,
-        "managerId": 1, "projectTypeId": 1, "boardConfig": "{}", "coverImageUrl": ""
-    }
-    print(f"🔨 [Tool] Đang tạo Project '{name}'...")
-    result = api_client.post_multipart(endpoint, payload)
-    if "error" in result: return f"Thất bại: {result.get('details', result['error'])}"
-    return f"Thành công! Kết quả: {result}"
 
+    # Payload chuẩn chuẩn bị gửi đi
+    payload = {
+        "name": name,
+        "projectCode": code,
+        "description": description,
+        "startDate": start_date,
+        "dueDate": due_date,
+        "priority": priority,
+        "goal": goal,
+        "managerId": 1,
+        "projectTypeId": 1,
+        "boardConfig": "{}",
+        "coverImageUrl": ""
+    }
+
+    print(f"🔨 [Tool] Đang gửi yêu cầu tạo Project: {name} (Code: {code})")
+
+    # THAY THẾ post_multipart BẰNG post (Gửi dạng JSON application/json)
+    # Vì multipart thường gây lỗi encoding với tiếng Việt trên một số Backend
+    result = api_client.post(endpoint, payload)
+
+    if "error" in result:
+        return f"❌ Thất bại: {result.get('details', result['error'])}"
+
+    return f"✅ Thành công! Dự án '{name}' đã được khởi tạo trên hệ thống."
 
 # =============================================================================
 # TOOL 5: XÓA DỰ ÁN
@@ -392,3 +398,67 @@ def get_workspace_projects(
         output_lines.append(line)
 
     return "\n".join(output_lines)
+
+# =============================================================================
+# TOOL 10: LẤY DANH SÁCH WORKSPACE (Nâng cấp Auto-Mapping)
+# =============================================================================
+
+class GetWorkspacesInput(BaseModel):
+    # Cho phép nhận cả Số (ID) hoặc Chữ (Tên công ty)
+    company_id: Union[int, str] = Field(
+        description="ID số của công ty hoặc Tên công ty (Ví dụ: 1 hoặc 'TechVision')"
+    )
+
+
+@tool("get_company_workspaces", args_schema=GetWorkspacesInput)
+def get_company_workspaces(company_id: Union[int, str]):
+    """
+    Lấy danh sách Workspace của một công ty.
+    Chấp nhận đầu vào là ID số hoặc Tên công ty để tự động ánh xạ.
+    """
+
+    # 1. Logic Mapping Tên -> ID (Để xử lý khi user gõ chữ thay vì chọn số)
+    # Bạn có thể mở rộng danh sách này hoặc gọi fetch_project_mapping để lấy list động
+    final_id = company_id
+    if isinstance(company_id, str):
+        name_input = company_id.lower().strip()
+        if "techvision" in name_input or name_input == "1":
+            final_id = 1
+        elif "innovatech" in name_input or name_input == "2":
+            final_id = 2
+        else:
+            # Nếu user nhập tên lạ, trả về hướng dẫn thay vì để AI tự bịa
+            return f"❌ Không tìm thấy ID cho công ty '{company_id}'. Vui lòng chọn đúng tên trong danh sách hoặc nhập số thứ tự."
+
+    print(f"🏢 [Project-Tool] Mapping '{company_id}' -> ID: {final_id}. Đang lấy Workspaces...")
+
+    # 2. Gọi API với ID đã được chuẩn hóa
+    endpoint = f"/api/companies/{final_id}/workspaces"
+    params = {
+        "page": 0,
+        "size": 50,
+        "sortBy": "createdAt",
+        "sortDir": "desc"
+    }
+
+    query_string = urlencode(params)
+    full_url = f"{endpoint}?{query_string}"
+
+    result = api_client.get(full_url)
+
+    if "error" in result:
+        return f"❌ Lỗi API: {result['error']}"
+
+    data = result.get("data", {})
+    workspaces = data.get("content", [])
+
+    if not workspaces:
+        return f"📭 Công ty (ID: {final_id}) hiện chưa có Workspace nào."
+
+    # 3. Trả về kết quả sạch cho AI hiển thị
+    output = f"✅ Đã tìm thấy {len(workspaces)} Workspace cho công ty này:\n"
+    for ws in workspaces:
+        output += f"- {ws.get('workspaceName')} | ID Workspace: {ws.get('workspaceId')}\n"
+
+    output += "\n👉 AI hãy yêu cầu người dùng chọn tên Workspace hoặc nhập ID tương ứng."
+    return output
