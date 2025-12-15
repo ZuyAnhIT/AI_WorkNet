@@ -6,6 +6,10 @@ from .api_client import api_client
 from enum import Enum
 from urllib.parse import urlencode
 from typing import Union
+import json
+import httpx
+from utils.request_context import get_user_token
+
 # =============================================================================
 # HELPER: MAPPING DỮ LIỆU (Định nghĩa hàm này để Tool gọi được)
 # =============================================================================
@@ -140,53 +144,121 @@ def get_current_date():
     now = datetime.now()
     return f"Hôm nay là: {now.strftime('%Y-%m-%d')} (Thứ {now.strftime('%A')})"
 
+
 # =============================================================================
-# TOOL 4: TẠO DỰ ÁN
+# TOOL 4: TẠO DỰ ÁN (MULTIPART/FORM-DATA CHUẨN)
 # =============================================================================
 class CreateProjectInput(BaseModel):
-    name: str = Field(description="Tên dự án")
-    code: str = Field(description="Mã dự án (projectCode)")
-    description: str = Field(description="Mô tả dự án")
-    company_id: int = Field(description="ID công ty (Dùng find_project_context để tìm hoặc mặc định 1)")
-    workspace_id: int = Field(description="ID workspace (Dùng find_project_context để tìm hoặc mặc định 1)")
-    start_date: str = Field(description="Ngày bắt đầu (YYYY-MM-DD)")
-    due_date: str = Field(description="Ngày kết thúc (YYYY-MM-DD)")
-    priority: str = Field(description="Priority (LOW/MEDIUM/HIGH)")
-    goal: str = Field(description="Mục tiêu dự án")
+    # --- 1. CONTEXT ID (TỰ ĐỘNG) ---
+    company_id: int = Field(..., description="🛑 SYSTEM_ID: Lấy từ SYSTEM CONTEXT.")
+    workspace_id: int = Field(..., description="🛑 SYSTEM_ID: Lấy từ SYSTEM CONTEXT.")
+
+    # --- 2. USER INPUT (7 TRƯỜNG BẮT BUỘC) ---
+    name: str = Field(None, description="Tên dự án")
+    code: str = Field(None, description="Mã dự án")
+    description: str = Field(None, description="Mô tả")
+    goal: str = Field(None, description="Mục tiêu")
+    start_date: str = Field(None, description="Ngày bắt đầu (YYYY-MM-DD)")
+    due_date: str = Field(None, description="Ngày kết thúc (YYYY-MM-DD)")
+    priority: str = Field(None, description="Độ ưu tiên")
 
 
 @tool("create_project", args_schema=CreateProjectInput)
-def create_project(name: str, code: str, description: str, company_id: int, workspace_id: int, start_date: str,
-                   due_date: str, priority: str, goal: str):
-    """Tạo Project mới."""
-    endpoint = f"/api/companies/{company_id}/workspaces/{workspace_id}/projects"
+def create_project(
+        company_id: int,
+        workspace_id: int,
+        name: str = None,
+        code: str = None,
+        description: str = None,
+        goal: str = None,
+        start_date: str = None,
+        due_date: str = None,
+        priority: str = None
+):
+    """
+    Tạo Project bằng Multipart/Form-data.
+    """
+    # 1. KIỂM TRA ĐỦ 7 TRƯỜNG
+    missing = []
+    if not name: missing.append("Tên dự án")
+    if not code: missing.append("Mã dự án")
+    if not description: missing.append("Mô tả")
+    if not goal: missing.append("Mục tiêu")
+    if not start_date: missing.append("Ngày bắt đầu")
+    if not due_date: missing.append("Ngày kết thúc")
+    if not priority: missing.append("Độ ưu tiên")
 
-    # Payload chuẩn chuẩn bị gửi đi
-    payload = {
+    if missing:
+        return f"❌ Thiếu thông tin: {', '.join(missing)}. Vui lòng hỏi user."
+
+    # 2. XỬ LÝ ID & DATA FORMAT
+    if not company_id: company_id = 1
+    if not workspace_id: workspace_id = 1
+
+    code = code.upper().strip()
+    priority = priority.upper().strip()
+
+    # 3. TẠO DICT DỮ LIỆU (Giống hệt cấu trúc JSON bạn yêu cầu)
+    project_dto = {
         "name": name,
         "projectCode": code,
         "description": description,
+        "goal": goal,
         "startDate": start_date,
         "dueDate": due_date,
         "priority": priority,
-        "goal": goal,
-        "managerId": 1,
-        "projectTypeId": 1,
-        "boardConfig": "{}",
-        "coverImageUrl": ""
+
+        # Các trường mặc định (Backend yêu cầu)
+        "managerId": None,  # Gửi null
+        "boardConfig": {},  # Gửi empty object
+        "coverImageUrl": "null",  # Gửi string "null"
+        "projectTypeId": None  # Gửi null
     }
 
-    print(f"🔨 [Tool] Đang gửi yêu cầu tạo Project: {name} (Code: {code})")
+    # Chuyển Dict thành JSON String để nhét vào Multipart
+    json_payload = json.dumps(project_dto, ensure_ascii=False)
 
-    # THAY THẾ post_multipart BẰNG post (Gửi dạng JSON application/json)
-    # Vì multipart thường gây lỗi encoding với tiếng Việt trên một số Backend
-    result = api_client.post(endpoint, payload)
+    print(f"🔨 [Tool] Đang gửi Multipart: {name} ({code})")
 
-    if "error" in result:
-        return f"❌ Thất bại: {result.get('details', result['error'])}"
+    # 4. GỬI REQUEST (QUAN TRỌNG NHẤT)
+    base_url = "http://localhost:8082"
+    endpoint = f"/api/companies/{company_id}/workspaces/{workspace_id}/projects"
+    full_url = f"{base_url}{endpoint}"
 
-    return f"✅ Thành công! Dự án '{name}' đã được khởi tạo trên hệ thống."
+    try:
+        token = get_user_token()
 
+        # Header: KHÔNG ĐƯỢC set Content-Type (httpx tự sinh boundary)
+        headers = {
+            "Authorization": f"Bearer {token}"
+        }
+
+        # Cấu trúc Multipart:
+        # key: 'data' (tên part mà Backend @RequestPart("data") hứng)
+        # value: (filename, content, content_type)
+        files = {
+            'data': (None, json_payload, 'application/json')
+        }
+
+        with httpx.Client(timeout=30.0) as client:
+            # Dùng tham số `files=` để gửi multipart/form-data
+            response = client.post(full_url, files=files, headers=headers)
+
+            print(f"🔍 [DEBUG STATUS]: {response.status_code}")
+
+            if response.status_code >= 400:
+                return f"❌ Backend từ chối ({response.status_code}): {response.text}"
+
+            result = response.json()
+
+    except Exception as e:
+        print(f"❌ [TOOL ERROR]: {str(e)}")
+        return f"❌ Lỗi hệ thống: {str(e)}"
+
+    data = result.get('data', {})
+    new_id = data.get('id', 'N/A')
+
+    return f"✅ Thành công! Dự án '{name}' đã được tạo (ID: {new_id})."
 # =============================================================================
 # TOOL 5: XÓA DỰ ÁN
 # =============================================================================
@@ -210,109 +282,182 @@ def delete_project(company_id: int, workspace_id: int, project_id: int):
 
 
 # =============================================================================
-# TOOL 6: XEM CHI TIẾT DỰ ÁN
+# TOOL 6: XEM CHI TIẾT DỰ ÁN (SILENT CONTEXT)
 # =============================================================================
 class GetProjectDetailsInput(BaseModel):
-    company_id: int = Field(description="ID công ty")
-    workspace_id: int = Field(description="ID workspace")
-    project_id: int = Field(description="ID dự án")
+    # 👇 CỐ ĐỊNH ID TỪ CONTEXT
+    company_id: int = Field(..., description="🛑 SYSTEM_ID: Lấy từ SYSTEM CONTEXT.")
+    workspace_id: int = Field(..., description="🛑 SYSTEM_ID: Lấy từ SYSTEM CONTEXT.")
+
+    # 👇 ID DỰ ÁN (User cung cấp hoặc lấy từ Context)
+    project_id: int = Field(..., description="ID dự án cần xem.")
 
 
 @tool("get_project_details", args_schema=GetProjectDetailsInput)
 def get_project_details(company_id: int, workspace_id: int, project_id: int):
-    """Xem thông tin chi tiết dự án."""
+    """Xem thông tin chi tiết dự án trước khi sửa hoặc xóa."""
+
+    # Logic phòng thủ
+    if not company_id: company_id = 1
+    if not workspace_id: workspace_id = 1
+
+    base_url = "http://localhost:8082"
     endpoint = f"/api/companies/{company_id}/workspaces/{workspace_id}/projects/{project_id}"
+
     print(f"🔍 [Tool] Đang xem chi tiết Project ID {project_id}...")
 
-    result = api_client.get(endpoint)
-    if "error" in result: return f"Thất bại: {result.get('details', result['error'])}"
+    try:
+        # Lấy token
+        token = get_user_token()
+        headers = {"Authorization": f"Bearer {token}"}
 
-    data = result.get("data", {})
-    if not data: return "Không tìm thấy dữ liệu dự án."
+        with httpx.Client(timeout=10.0) as client:
+            response = client.get(f"{base_url}{endpoint}", headers=headers)
 
+            if response.status_code == 404:
+                return "❌ Không tìm thấy dự án. Vui lòng kiểm tra lại Project ID."
+            if response.status_code != 200:
+                return f"❌ Lỗi: {response.text}"
+
+            data = response.json().get("data", {})
+
+    except Exception as e:
+        return f"❌ Lỗi hệ thống: {str(e)}"
+
+    if not data: return "⚠️ Không tìm thấy dữ liệu dự án."
+
+    # Format kết quả trả về cho AI đọc để hiển thị lại cho user
     return f"""
-    THÔNG TIN DỰ ÁN (ID: {data.get('id')}):
-    - Name: {data.get('name')}
-    - Code: {data.get('projectCode')}
-    - CompanyID: {company_id}
-    - WorkspaceID: {workspace_id}
-    - ManagerId: {data.get('managerId')}
+    --- THÔNG TIN DỰ ÁN (ID: {data.get('id')}) ---
+    - Tên dự án: {data.get('name')}
+    - Mã dự án: {data.get('projectCode')}
+    - Mô tả: {data.get('description')}
+    - Mục tiêu: {data.get('goal')}
+    - Thời gian: {data.get('startDate')} đến {data.get('dueDate')}
+    - Độ ưu tiên: {data.get('priority')}
+    - Trạng thái: {data.get('status')}
+    - Người quản lý (ID): {data.get('managerId')}
+    ---------------------------------------------
     """
-
-
-from typing import Optional
-from langchain.tools import tool
-from pydantic import BaseModel, Field
-
-
 # =============================================================================
 # TOOL 7: CẬP NHẬT DỰ ÁN (FULL SCHEMA)
 # =============================================================================
-
 class UpdateProjectInput(BaseModel):
-    # 1. Path Params
-    company_id: int = Field(description="ID công ty")
-    workspace_id: int = Field(description="ID workspace")
-    project_id: int = Field(description="ID dự án")
+    # --- 1. CONTEXT ID (SILENT) ---
+    company_id: int = Field(..., description="🛑 SYSTEM_ID: Lấy từ SYSTEM CONTEXT.")
+    workspace_id: int = Field(..., description="🛑 SYSTEM_ID: Lấy từ SYSTEM CONTEXT.")
 
-    # 2. Body Params (Full options from Backend JSON)
-    name: Optional[str] = Field(default=None, description="Tên dự án")
-    project_code: Optional[str] = Field(default=None, description="Mã dự án (projectCode)")
-    description: Optional[str] = Field(default=None, description="Mô tả")
-    goal: Optional[str] = Field(default=None, description="Mục tiêu")
-    priority: Optional[str] = Field(default=None, description="Priority (LOW, MEDIUM, HIGH)")
+    # --- 2. ID DỰ ÁN (BẮT BUỘC) ---
+    project_id: int = Field(..., description="ID của dự án cần sửa.")
 
-    start_date: Optional[str] = Field(default=None, description="Ngày bắt đầu (YYYY-MM-DD)")
-    due_date: Optional[str] = Field(default=None, description="Ngày kết thúc dự kiến (YYYY-MM-DD)")
-    completed_at: Optional[str] = Field(default=None,
-                                        description="Ngày hoàn thành thực tế (YYYY-MM-DD). Điền vào để đóng dự án.")
+    # --- 3. FIELDS CẦN SỬA (OPTIONAL) ---
+    name: str = Field(None, description="Tên mới (Nếu có)")
+    project_code: str = Field(None, description="Mã dự án mới (Nếu có)")
+    description: str = Field(None, description="Mô tả mới")
+    goal: str = Field(None, description="Mục tiêu mới")
+    priority: str = Field(None, description="Priority mới (LOW, MEDIUM, HIGH)")
 
-    manager_id: Optional[int] = Field(default=None, description="ID người quản lý")
-    board_config: Optional[str] = Field(default=None, description="Cấu hình Board (JSON string)")
-    cover_image_url: Optional[str] = Field(default=None, description="URL ảnh bìa")
-    project_type_id: Optional[int] = Field(default=None, description="ID loại dự án")
+    start_date: str = Field(None, description="Ngày bắt đầu (YYYY-MM-DD)")
+    due_date: str = Field(None, description="Ngày kết thúc (YYYY-MM-DD)")
+    completed_at: str = Field(None, description="Ngày hoàn thành thực tế (Để đóng dự án)")
+
+    status: str = Field(None, description="Trạng thái (TODO, IN_PROGRESS, DONE...)")
+    manager_id: int = Field(None, description="ID người quản lý mới")
 
 
 @tool("update_project", args_schema=UpdateProjectInput)
 def update_project(
         company_id: int, workspace_id: int, project_id: int,
-        name: str = None, project_code: str = None, description: str = None, goal: str = None,
-        priority: str = None, start_date: str = None, due_date: str = None, completed_at: str = None,
-        manager_id: int = None, board_config: str = None, cover_image_url: str = None, project_type_id: int = None
+        name: str = None, project_code: str = None, description: str = None,
+        goal: str = None, priority: str = None,
+        start_date: str = None, due_date: str = None, completed_at: str = None,
+        status: str = None, manager_id: int = None
 ):
     """
-    Cập nhật toàn bộ thông tin dự án.
-    Hỗ trợ sửa: Tên, Mã, Mô tả, Mục tiêu, Priority, Các loại ngày tháng, Config, Manager...
+    Cập nhật dự án. Tool sẽ tự động lấy thông tin cũ và ghi đè thông tin mới vào.
     """
+    # 1. SETUP URL
+    if not company_id: company_id = 1
+    if not workspace_id: workspace_id = 1
+
+    base_url = "http://localhost:8082"
     endpoint = f"/api/companies/{company_id}/workspaces/{workspace_id}/projects/{project_id}"
+    full_url = f"{base_url}{endpoint}"
 
-    # Mapping chính xác Python snake_case -> API camelCase
-    payload = {}
-    if name: payload["name"] = name
-    if project_code: payload["projectCode"] = project_code
-    if description: payload["description"] = description
-    if goal: payload["goal"] = goal
-    if priority: payload["priority"] = priority
-    if start_date: payload["startDate"] = start_date
-    if due_date: payload["dueDate"] = due_date
-    if completed_at: payload["completedAt"] = completed_at
-    if manager_id: payload["managerId"] = manager_id
-    if board_config: payload["boardConfig"] = board_config
-    if cover_image_url: payload["coverImageUrl"] = cover_image_url
-    if project_type_id: payload["projectTypeId"] = project_type_id
+    print(f"✏️ [Tool] Đang xử lý Update Project ID {project_id}...")
 
-    if not payload:
-        return "⚠️ Bạn chưa nhập thông tin nào cần chỉnh sửa."
+    try:
+        token = get_user_token()
+        headers = {"Authorization": f"Bearer {token}"}
 
-    print(f"✏️ [Tool] Đang cập nhật Project ID {project_id} (Multipart)...")
+        # 2. BƯỚC QUAN TRỌNG: LẤY DỮ LIỆU CŨ (GET)
+        # Tại sao? Vì PUT thường ghi đè toàn bộ object. Nếu ta gửi thiếu trường nào, trường đó sẽ bị null.
+        # Ta cần lấy cái cũ về để điền vào chỗ trống.
+        with httpx.Client(timeout=10.0) as client:
+            get_resp = client.get(full_url, headers=headers)
 
-    # Gửi Multipart để tránh lỗi 415
-    result = api_client.put_multipart(endpoint, payload)
+            if get_resp.status_code == 404:
+                return f"❌ Không tìm thấy dự án có ID {project_id}."
+            if get_resp.status_code != 200:
+                return f"❌ Lỗi khi lấy thông tin cũ: {get_resp.text}"
 
-    if "error" in result:
-        return f"❌ Cập nhật thất bại: {result.get('details', result['error'])}"
+            # Data cũ từ Backend
+            old_data = get_resp.json().get('data', {})
 
-    return f"✅ Cập nhật thành công! Các trường đã lưu: {', '.join(payload.keys())}"
+        # 3. BƯỚC MERGE: TRỘN CŨ VÀ MỚI
+        # Logic: Nếu tham số mới có giá trị -> Lấy mới. Nếu không (None) -> Giữ cũ.
+        merged_data = {
+            "name": name if name else old_data.get("name"),
+            "projectCode": project_code if project_code else old_data.get("projectCode"),
+            "description": description if description else old_data.get("description"),
+            "goal": goal if goal else old_data.get("goal"),
+            "priority": priority if priority else old_data.get("priority"),
+            "startDate": start_date if start_date else old_data.get("startDate"),
+            "dueDate": due_date if due_date else old_data.get("dueDate"),
+            "completedAt": completed_at if completed_at else old_data.get("completedAt"),
+            "status": status if status else old_data.get("status"),
+            "managerId": manager_id if manager_id else old_data.get("managerId"),
+
+            # Những trường ít khi sửa, giữ nguyên từ cái cũ
+            "boardConfig": old_data.get("boardConfig", {}),
+            "coverImageUrl": old_data.get("coverImageUrl", "null"),
+            "projectTypeId": old_data.get("projectTypeId")
+        }
+
+        # Chuẩn hóa lại Enum nếu cần
+        if merged_data["priority"]: merged_data["priority"] = merged_data["priority"].upper()
+
+        # 4. BƯỚC GỬI: PUT MULTIPART
+        multipart_payload = {
+            'data': (None, json.dumps(merged_data, ensure_ascii=False), 'application/json')
+        }
+
+        with httpx.Client(timeout=30.0) as client:
+            # Dùng PUT
+            put_resp = client.put(full_url, files=multipart_payload, headers=headers)
+
+            print(f"🔍 [DEBUG STATUS]: {put_resp.status_code}")
+
+            if put_resp.status_code >= 400:
+                return f"❌ Backend từ chối cập nhật ({put_resp.status_code}): {put_resp.text}"
+
+            result = put_resp.json()
+
+    except Exception as e:
+        print(f"❌ [TOOL ERROR]: {str(e)}")
+        return f"❌ Lỗi hệ thống: {str(e)}"
+
+    # 5. TRẢ KẾT QUẢ
+    # Liệt kê những trường đã thực sự thay đổi để báo cho user
+    changed_fields = []
+    if name: changed_fields.append("Tên")
+    if project_code: changed_fields.append("Mã")
+    if start_date or due_date: changed_fields.append("Thời gian")
+    if priority: changed_fields.append("Độ ưu tiên")
+
+    msg_changed = ", ".join(changed_fields) if changed_fields else "thông tin chi tiết"
+    return f"✅ Cập nhật thành công {msg_changed} cho dự án ID {project_id}."
+
 # =============================================================================
 # TOOL 8: TRA CỨU ID CÔNG TY & WORKSPACE (Dùng để TẠO DỰ ÁN)
 # =============================================================================
