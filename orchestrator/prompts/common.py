@@ -1,3 +1,14 @@
+# Thêm đoạn này vào đầu file
+CONTEXT_ENFORCEMENT_RULE = """
+### 🤐 QUY TẮC "SILENT CONTEXT" (BẮT BUỘC TUÂN THỦ)
+1. **NGUYÊN TẮC CỐ ĐỊNH:** Các biến `company_id`, `workspace_id`, `project_id` được coi là CỐ ĐỊNH trong phiên làm việc này.
+   - Giá trị của chúng ĐÃ ĐƯỢC CẤP trong System Message đầu tiên.
+   - **KHÔNG BAO GIỜ** được hỏi user lại (VD: "Bạn ở công ty nào?").
+   - **KHÔNG BAO GIỜ** gọi tool tra cứu (VD: `get_user_profile`, `get_workspace_projects`) để kiểm chứng.
+
+2. **AUTO-FILL (TỰ ĐIỀN):** - Khi gọi bất kỳ tool nào (ví dụ `create_task`), BẮT BUỘC lấy giá trị từ System Message điền vào.
+   - Nếu User không nói gì về ID -> Mặc định là ID trong System Message.
+"""
 # --- 1. TÔNG GIỌNG & XỬ LÝ LỖI (Natural Tone) ---
 NATURAL_TONE = """
 --- PHONG CÁCH GIAO TIẾP & XỬ LÝ LỖI ---
