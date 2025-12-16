@@ -339,42 +339,57 @@ def get_project_details(company_id: int, workspace_id: int, project_id: int):
     - Người quản lý (ID): {data.get('managerId')}
     ---------------------------------------------
     """
+
+
 # =============================================================================
-# TOOL 7: CẬP NHẬT DỰ ÁN (FULL SCHEMA)
+# TOOL 7: CẬP NHẬT DỰ ÁN (FULL SCHEMA - FIX NULL ERROR)
 # =============================================================================
+
 class UpdateProjectInput(BaseModel):
-    # --- 1. CONTEXT ID (SILENT) ---
+    # --- 1. CONTEXT ID (SILENT - BẮT BUỘC) ---
     company_id: int = Field(..., description="🛑 SYSTEM_ID: Lấy từ SYSTEM CONTEXT.")
     workspace_id: int = Field(..., description="🛑 SYSTEM_ID: Lấy từ SYSTEM CONTEXT.")
-
-    # --- 2. ID DỰ ÁN (BẮT BUỘC) ---
     project_id: int = Field(..., description="ID của dự án cần sửa.")
 
-    # --- 3. FIELDS CẦN SỬA (OPTIONAL) ---
-    name: str = Field(None, description="Tên mới (Nếu có)")
-    project_code: str = Field(None, description="Mã dự án mới (Nếu có)")
-    description: str = Field(None, description="Mô tả mới")
-    goal: str = Field(None, description="Mục tiêu mới")
-    priority: str = Field(None, description="Priority mới (LOW, MEDIUM, HIGH)")
+    # --- 2. FIELDS CẦN SỬA (OPTIONAL - CHO PHÉP NULL) ---
+    # Thay vì 'str', ta dùng 'Optional[str]' để chấp nhận giá trị None từ AI
+    name: Optional[str] = Field(None, description="Tên mới (Nếu có)")
+    project_code: Optional[str] = Field(None, description="Mã dự án mới (In hoa, không dấu)")
+    description: Optional[str] = Field(None, description="Mô tả mới")
+    goal: Optional[str] = Field(None, description="Mục tiêu mới")
+    priority: Optional[str] = Field(None, description="Priority mới (LOW, MEDIUM, HIGH)")
 
-    start_date: str = Field(None, description="Ngày bắt đầu (YYYY-MM-DD)")
-    due_date: str = Field(None, description="Ngày kết thúc (YYYY-MM-DD)")
-    completed_at: str = Field(None, description="Ngày hoàn thành thực tế (Để đóng dự án)")
+    start_date: Optional[str] = Field(None, description="Ngày bắt đầu (YYYY-MM-DD)")
+    due_date: Optional[str] = Field(None, description="Ngày kết thúc (YYYY-MM-DD)")
+    completed_at: Optional[str] = Field(None, description="Ngày hoàn thành thực tế (Để đóng dự án)")
 
-    status: str = Field(None, description="Trạng thái (TODO, IN_PROGRESS, DONE...)")
-    manager_id: int = Field(None, description="ID người quản lý mới")
+    status: Optional[str] = Field(None, description="Trạng thái (NEW, ACTIVE, COMPLETED...)")
+    manager_id: Optional[int] = Field(None, description="ID người quản lý mới (Integer)")
+
+    cover_image_url: Optional[str] = Field(None, description="Link ảnh bìa")
+    board_config: Optional[str] = Field(None, description="Cấu hình Board")
+    project_type_id: Optional[int] = Field(None, description="ID loại dự án")
 
 
 @tool("update_project", args_schema=UpdateProjectInput)
 def update_project(
         company_id: int, workspace_id: int, project_id: int,
-        name: str = None, project_code: str = None, description: str = None,
-        goal: str = None, priority: str = None,
-        start_date: str = None, due_date: str = None, completed_at: str = None,
-        status: str = None, manager_id: int = None
+        name: Optional[str] = None,
+        project_code: Optional[str] = None,
+        description: Optional[str] = None,
+        goal: Optional[str] = None,
+        priority: Optional[str] = None,
+        start_date: Optional[str] = None,
+        due_date: Optional[str] = None,
+        completed_at: Optional[str] = None,
+        status: Optional[str] = None,
+        manager_id: Optional[int] = None,
+        cover_image_url: Optional[str] = None,
+        board_config: Optional[str] = None,
+        project_type_id: Optional[int] = None
 ):
     """
-    Cập nhật dự án. Tool sẽ tự động lấy thông tin cũ và ghi đè thông tin mới vào.
+    Cập nhật dự án. Tự động lấy dữ liệu cũ và merge với dữ liệu mới.
     """
     # 1. SETUP URL
     if not company_id: company_id = 1
@@ -391,8 +406,6 @@ def update_project(
         headers = {"Authorization": f"Bearer {token}"}
 
         # 2. BƯỚC QUAN TRỌNG: LẤY DỮ LIỆU CŨ (GET)
-        # Tại sao? Vì PUT thường ghi đè toàn bộ object. Nếu ta gửi thiếu trường nào, trường đó sẽ bị null.
-        # Ta cần lấy cái cũ về để điền vào chỗ trống.
         with httpx.Client(timeout=10.0) as client:
             get_resp = client.get(full_url, headers=headers)
 
@@ -405,27 +418,28 @@ def update_project(
             old_data = get_resp.json().get('data', {})
 
         # 3. BƯỚC MERGE: TRỘN CŨ VÀ MỚI
-        # Logic: Nếu tham số mới có giá trị -> Lấy mới. Nếu không (None) -> Giữ cũ.
+        # Logic: Nếu tham số mới có giá trị (không None) -> Lấy mới. Nếu None -> Giữ cũ.
         merged_data = {
-            "name": name if name else old_data.get("name"),
-            "projectCode": project_code if project_code else old_data.get("projectCode"),
-            "description": description if description else old_data.get("description"),
-            "goal": goal if goal else old_data.get("goal"),
-            "priority": priority if priority else old_data.get("priority"),
-            "startDate": start_date if start_date else old_data.get("startDate"),
-            "dueDate": due_date if due_date else old_data.get("dueDate"),
-            "completedAt": completed_at if completed_at else old_data.get("completedAt"),
-            "status": status if status else old_data.get("status"),
-            "managerId": manager_id if manager_id else old_data.get("managerId"),
+            "name": name if name is not None else old_data.get("name"),
+            "projectCode": project_code if project_code is not None else old_data.get("projectCode"),
+            "description": description if description is not None else old_data.get("description"),
+            "goal": goal if goal is not None else old_data.get("goal"),
+            "priority": priority if priority is not None else old_data.get("priority"),
+            "startDate": start_date if start_date is not None else old_data.get("startDate"),
+            "dueDate": due_date if due_date is not None else old_data.get("dueDate"),
+            "completedAt": completed_at if completed_at is not None else old_data.get("completedAt"),
+            "status": status if status is not None else old_data.get("status"),
+            "managerId": manager_id if manager_id is not None else old_data.get("managerId"),
 
-            # Những trường ít khi sửa, giữ nguyên từ cái cũ
-            "boardConfig": old_data.get("boardConfig", {}),
-            "coverImageUrl": old_data.get("coverImageUrl", "null"),
-            "projectTypeId": old_data.get("projectTypeId")
+            # Các trường phụ
+            "boardConfig": board_config if board_config is not None else old_data.get("boardConfig"),
+            "coverImageUrl": cover_image_url if cover_image_url is not None else old_data.get("coverImageUrl"),
+            "projectTypeId": project_type_id if project_type_id is not None else old_data.get("projectTypeId")
         }
 
-        # Chuẩn hóa lại Enum nếu cần
-        if merged_data["priority"]: merged_data["priority"] = merged_data["priority"].upper()
+        # Chuẩn hóa Priority (Backend thường cần uppercase)
+        if merged_data["priority"]:
+            merged_data["priority"] = merged_data["priority"].upper()
 
         # 4. BƯỚC GỬI: PUT MULTIPART
         multipart_payload = {
@@ -448,12 +462,11 @@ def update_project(
         return f"❌ Lỗi hệ thống: {str(e)}"
 
     # 5. TRẢ KẾT QUẢ
-    # Liệt kê những trường đã thực sự thay đổi để báo cho user
     changed_fields = []
     if name: changed_fields.append("Tên")
     if project_code: changed_fields.append("Mã")
-    if start_date or due_date: changed_fields.append("Thời gian")
     if priority: changed_fields.append("Độ ưu tiên")
+    if goal: changed_fields.append("Mục tiêu")
 
     msg_changed = ", ".join(changed_fields) if changed_fields else "thông tin chi tiết"
     return f"✅ Cập nhật thành công {msg_changed} cho dự án ID {project_id}."
@@ -506,11 +519,15 @@ def lookup_hierarchy(company_name: str, workspace_name: str):
 
     return "✅ TÌM THẤY THÔNG TIN:\n" + "\n".join(found_info) + "\n--> Hãy dùng ID trên để gọi create_project."
 
+
 # =============================================================================
-# TOOL 9: LẤY DANH SÁCH DỰ ÁN TRONG WORKSPACE (API MỚI)
+# TOOL 9: LẤY DANH SÁCH DỰ ÁN (ĐÃ CẬP NHẬT TÌM KIẾM KEYWORD)
 # =============================================================================
 
-# 1. Định nghĩa Enum trạng thái để AI chọn chính xác
+from urllib.parse import urlencode
+
+
+# 1. Định nghĩa Enum trạng thái (Giữ nguyên)
 class ProjectStatus(str, Enum):
     ACTIVE = "ACTIVE"
     NEW = "NEW"
@@ -520,13 +537,17 @@ class ProjectStatus(str, Enum):
     CANCELLED = "CANCELLED"
 
 
-# 2. Định nghĩa Input Schema
+# 2. Định nghĩa Input Schema (ĐÃ THÊM KEYWORD)
 class GetWorkspaceProjectsInput(BaseModel):
-    company_id: int = Field(description="ID của công ty (Lấy từ tool get_user_profile)")
-    workspace_id: int = Field(description="ID của workspace (Lấy từ tool get_user_profile)")
-    status: Optional[ProjectStatus] = Field(default=None,
-                                            description="Lọc trạng thái: NEW, IN_PROGRESS, COMPLETED... (Để trống nếu lấy tất cả)")
-    limit: int = Field(default=10, description="Số lượng dự án muốn lấy (Mặc định 10)")
+    company_id: int = Field(description="🛑 SYSTEM_ID: Lấy từ SYSTEM CONTEXT.")
+    workspace_id: int = Field(description="🛑 SYSTEM_ID: Lấy từ SYSTEM CONTEXT.")
+
+    # 👇 [THÊM MỚI] Để AI điền tên dự án cần tìm vào đây
+    keyword: Optional[str] = Field(default=None,
+                                   description="Tên dự án hoặc từ khóa cần tìm kiếm (Ví dụ: 'Chatbot', 'ERP').")
+
+    status: Optional[ProjectStatus] = Field(default=None, description="Lọc trạng thái: NEW, IN_PROGRESS...")
+    limit: int = Field(default=10, description="Số lượng dự án muốn lấy")
 
 
 # 3. Hàm xử lý chính
@@ -534,19 +555,20 @@ class GetWorkspaceProjectsInput(BaseModel):
 def get_workspace_projects(
         company_id: int,
         workspace_id: int,
+        keyword: Optional[str] = None,  # 👇 [THÊM MỚI] Tham số hàm
         status: Optional[ProjectStatus] = None,
         limit: int = 10
 ):
     """
-    Dùng tool này để XEM DANH SÁCH DỰ ÁN.
-    Gọi API lấy danh sách dự án đầy đủ trong một Workspace cụ thể.
+    Tìm kiếm dự án trong Workspace.
+    Có thể lọc theo tên (keyword) hoặc trạng thái (status).
     """
-    print(f"📂 [Project-Tool] Đang lấy list dự án tại Workspace {workspace_id} (Status: {status})...")
+    print(f"📂 [Project-Tool] Tìm kiếm tại Workspace {workspace_id} | Keyword: '{keyword}' | Status: {status}...")
 
     # Endpoint gốc
     endpoint = f"/api/companies/{company_id}/workspaces/{workspace_id}/projects"
 
-    # Tạo dict tham số
+    # Tạo dict tham số cơ bản
     params = {
         "page": 0,
         "size": limit,
@@ -554,31 +576,36 @@ def get_workspace_projects(
         "sortDir": "desc"
     }
 
-    # Nếu có status thì thêm vào dict
+    # 👇 [LOGIC MỚI] Map tham số keyword của Tool vào tham số tìm kiếm của API
+    # Lưu ý: Kiểm tra Backend của bạn dùng ?search= hay ?keyword= hay ?name=
+    # Ở đây mình giả định Backend dùng ?search=
+    if keyword:
+        params["search"] = keyword
+
+        # Nếu có status thì thêm vào
     if status:
         params["status"] = status.value
 
-    # --- [SỬA LỖI TẠI ĐÂY] ---
-    # Thay vì truyền params=params, ta nối chuỗi thủ công:
+    # Nối chuỗi query param
     query_string = urlencode(params)
     full_url = f"{endpoint}?{query_string}"
 
-    # Gọi API với full_url (api_client.get chỉ nhận 1 tham số url)
+    # Gọi API
     result = api_client.get(full_url)
 
-    # Xử lý lỗi trả về từ wrapper api_client
+    # Xử lý lỗi
     if "error" in result:
         return f"❌ Lỗi API: {result['error']}"
 
-    # Lấy dữ liệu từ response JSON chuẩn
-    # Cấu trúc: { success: true, data: { content: [...] } }
     data = result.get("data", {})
     projects_list = data.get("content", [])
 
     if not projects_list:
+        if keyword:
+            return f"📭 Không tìm thấy dự án nào có tên chứa '{keyword}'."
         return "📭 Không tìm thấy dự án nào trong Workspace này."
 
-    # Format kết quả trả về dạng Text để AI dễ đọc
+    # Format kết quả
     output_lines = [f"✅ Tìm thấy {len(projects_list)} dự án:"]
 
     for p in projects_list:
@@ -586,11 +613,10 @@ def get_workspace_projects(
         name = p.get("name")
         code = p.get("projectCode")
         stt = p.get("status")
-        progress = p.get("progress", 0)
-        manager = p.get("managerName", "N/A")
+        # Thêm hiển thị Manager ID để AI biết đường map khi cần update
+        manager_id = p.get("managerId", "N/A")
 
-        # Dòng format: "- [ID: 123] Tên Dự Án (Code) | Status | Progress | Manager"
-        line = f"- [ID: {p_id}] {name} ({code}) | Trạng thái: {stt} | Tiến độ: {progress}% | QL: {manager}"
+        line = f"- [ID: {p_id}] {name} (Mã: {code}) | Status: {stt} | ManagerID: {manager_id}"
         output_lines.append(line)
 
     return "\n".join(output_lines)
