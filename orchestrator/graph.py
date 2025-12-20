@@ -8,6 +8,7 @@ from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 # --- IMPORT CÁC AGENT & MANAGER ---
 from agents.project_agent import create_project_agent
 from agents.task_agent import create_task_agent
+from agents.subtask_agent import create_subtask_agent  # <--- KHAI BÁO THÊM
 from agents.general_agent import create_general_agent
 from agents.analytics_agent import create_analytics_agent
 from orchestrator.prompts import SUPERVISOR_SYSTEM_PROMPT
@@ -85,6 +86,7 @@ class AgentState(TypedDict):
 # Lưu ý: Model sẽ được tạo động trong Node thông qua run_with_retry
 _, project_tools = create_project_agent()
 _, task_tools = create_task_agent()
+_, subtask_tools = create_subtask_agent() # <--- KHAI BÁO THÊM
 analytics_tools = create_analytics_agent()
 
 
@@ -145,6 +147,16 @@ def task_node(state: AgentState):
     response = run_with_retry(create_task_agent, messages, groq_engine, "Groq")
     return {"messages": [response]}
 
+# --- NODE MỚI CHO SUBTASK ---
+def subtask_node(state: AgentState):
+    """Xử lý Subtask - Có Retry Groq + Context"""
+    context_msg = create_context_prompt(state)
+    messages = [context_msg] + state["messages"]
+
+    # 🔥 Gọi qua wrapper
+    response = run_with_retry(create_subtask_agent, messages, groq_engine, "Groq")
+    return {"messages": [response]}
+
 
 def analytics_node(state: AgentState):
     """Xử lý Analytics - Có Retry Gemini + Context"""
@@ -194,6 +206,9 @@ def supervisor_node(state: AgentState):
 
             keywords_confirm = ["xác nhận", "thực hiện không", "đồng ý", "chắc chắn", "bảng dưới đây"]
             if any(k in ai_text for k in keywords_confirm):
+                # --- GHIM LUỒNG CHO SUBTASK ---
+                if "subtask" in ai_text or "việc con" in ai_text:
+                    return {"next": "Subtask_Agent"}
                 if any(x in ai_text for x in ["task", "excel", "công việc"]):
                     return {"next": "Task_Agent"}
                 if "dự án" in ai_text:
@@ -211,12 +226,13 @@ def supervisor_node(state: AgentState):
         f"{SUPERVISOR_SYSTEM_PROMPT}\n\n"
         f"=== PHÂN LOẠI AGENT ===\n"
         f"1. Analytics_Agent: Giao việc, dự báo, báo cáo, phân tích sâu.\n"
-        f"2. Task_Agent: Tạo/Sửa/Xóa task, xử lý file excel.\n"
-        f"3. Project_Agent: Quản lý dự án, workspace.\n"
+        f"2. Task_Agent: Tạo/Sửa/Xóa task chính, xử lý file excel.\n"
+        f"3. Subtask_Agent: Quản lý việc con, chia nhỏ công việc.\n" # <--- KHAI BÁO THÊM
+        f"4. Project_Agent: Quản lý dự án, workspace.\n"
         f"===================================\n"
         f"HISTORY:\n{history_str}\n"
         f"USER: '{last_user_msg.content}'\n"
-        "DECISION [Project_Agent, Task_Agent, General_Agent, Analytics_Agent]:"
+        "DECISION [Project_Agent, Task_Agent, Subtask_Agent, General_Agent, Analytics_Agent]:"
     )
 
     # 🔥 LOGIC RETRY CHO SUPERVISOR
@@ -239,11 +255,14 @@ def supervisor_node(state: AgentState):
 
     # --- Mapping logic ---
     if "Analytics" in result: return {"next": "Analytics_Agent"}
+    if "Subtask" in result: return {"next": "Subtask_Agent"} # <--- KHAI BÁO THÊM
     if "Task" in result: return {"next": "Task_Agent"}
     if "Project" in result: return {"next": "Project_Agent"}
     if "General" in result: return {"next": "General_Agent"}
 
     # --- C. FALLBACK ---
+    if any(k in user_text for k in ["subtask", "việc con", "task con", "chia nhỏ"]): # <--- KHAI BÁO THÊM
+        return {"next": "Subtask_Agent"}
     if any(k in user_text for k in ["phân tích", "tại sao", "rủi ro", "chiến lược", "báo cáo"]):
         return {"next": "Analytics_Agent"}
     if "dự án" in user_text: return {"next": "Project_Agent"}
@@ -261,12 +280,14 @@ workflow = StateGraph(AgentState)
 workflow.add_node("Supervisor", supervisor_node)
 workflow.add_node("Project_Agent", project_node)
 workflow.add_node("Task_Agent", task_node)
+workflow.add_node("Subtask_Agent", subtask_node) # <--- KHAI BÁO THÊM
 workflow.add_node("General_Agent", general_node)
 workflow.add_node("Analytics_Agent", analytics_node)
 
 # Tool Nodes
 workflow.add_node("project_tools", ToolNode(project_tools))
 workflow.add_node("task_tools", ToolNode(task_tools))
+workflow.add_node("subtask_tools", ToolNode(subtask_tools)) # <--- KHAI BÁO THÊM
 workflow.add_node("analytics_tools", ToolNode(analytics_tools))
 
 # Edges
@@ -278,6 +299,7 @@ workflow.add_conditional_edges(
     {
         "Project_Agent": "Project_Agent",
         "Task_Agent": "Task_Agent",
+        "Subtask_Agent": "Subtask_Agent", # <--- KHAI BÁO THÊM
         "General_Agent": "General_Agent",
         "Analytics_Agent": "Analytics_Agent",
         "END": END
@@ -307,6 +329,16 @@ def task_cond(state):
 
 workflow.add_conditional_edges("Task_Agent", task_cond, {"task_tools": "task_tools", "END": END})
 workflow.add_edge("task_tools", "Task_Agent")
+
+# --- VÒNG LẶP CHO SUBTASK ---
+def subtask_cond(state):
+    last_msg = state["messages"][-1]
+    if hasattr(last_msg, "tool_calls") and last_msg.tool_calls:
+        return "subtask_tools"
+    return "END"
+
+workflow.add_conditional_edges("Subtask_Agent", subtask_cond, {"subtask_tools": "subtask_tools", "END": END})
+workflow.add_edge("subtask_tools", "Subtask_Agent")
 
 
 # Analytics Loop

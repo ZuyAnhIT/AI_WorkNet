@@ -6,7 +6,7 @@ load_dotenv(override=True)
 
 class Config:
     # Model
-    GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+    GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
     # Danh sách Keys
     KEY_SUPERVISOR = os.getenv("GEMINI_KEY_SUPERVISOR")
