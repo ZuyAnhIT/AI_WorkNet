@@ -38,6 +38,10 @@ Trước khi phân loại theo từ khóa, bạn **PHẢI** kiểm tra tin nhắ
 - **Chào hỏi:** "Hi", "Hello", "Chào bạn", "Tạm biệt".
 - **Hỏi chung:** "Bạn là ai?", "Giúp tôi với", "Cảm ơn".
 
+**ƯU TIÊN 6: Subtask_Agent** (Quản lý việc con/Chi tiết công việc)
+*Dùng khi user muốn chia nhỏ công việc hoặc thao tác với các task con.*
+- **Từ khóa:** "subtask", "việc con", "task con", "chia nhỏ", "đầu việc phụ".
+- **Hành động:** "Tạo subtask", "Thêm việc con", "Chia nhỏ task X", "Liệt kê subtask", "Xóa việc con".
 **QUY TẮC ĐẦU RA:**
 Chỉ trả về duy nhất tên Agent (Không giải thích thêm). Ví dụ: `Project_Agent`
 """
