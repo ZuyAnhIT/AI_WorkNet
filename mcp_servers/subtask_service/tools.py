@@ -2,7 +2,7 @@ from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
 from .api_client import subtask_api_client
-
+from utils.gemini_manager import analytics_engine # Import manager chứa Gemini
 
 # =============================================================================
 # SCHEMA ĐỊNH NGHĨA ĐẦU VÀO
@@ -128,5 +128,35 @@ def subtask_create_api(company_id: int, workspace_id: int, project_id: int, task
     return success_msg
 
 
+# --- SCHEMA ĐẦU VÀO CHO SUGGESTION ---
+class SuggestionInput(BaseModel):
+    parent_title: str = Field(..., description="Tiêu đề của task cha")
+    parent_description: Optional[str] = Field(None, description="Mô tả chi tiết của task cha (nếu có)")
+
+
+# --- TOOL 3: GỢI Ý SUBTASK ---
+@tool("subtask_generate_suggestions", args_schema=SuggestionInput)
+def subtask_generate_suggestions(parent_title: str, parent_description: str = ""):
+    """
+    💡 [SUBTASK-SUGGEST] Sử dụng trí tuệ nhân tạo để phân tích task cha và đề xuất danh sách các việc con (subtask) thực tế.
+    """
+    print(f"\n💡 [SUBTASK-SUGGEST] Đang dùng Gemini để phân tích task: '{parent_title}'...")
+    system_instruction = """
+    Bạn là một Senior Project Manager. Hãy chia nhỏ task được cung cấp thành 3-5 subtask cụ thể.
+    Yêu cầu trả về danh sách ngắn gọn, thực tế, chia theo các lớp: Giao diện, Xử lý Logic, và Kiểm thử.
+    Định dạng mỗi subtask: [Tên việc con] - [Mô tả ngắn]
+    """
+
+    user_content = f"Task cha: {parent_title}\nMô tả: {parent_description if parent_description else 'Không có mô tả'}"
+
+    try:
+        response = llm.invoke([
+            ("system", system_instruction),
+            ("human", user_content)
+        ])
+        print("✅ [SUBTASK-SUGGEST] Đã tạo xong danh sách gợi ý.")
+        return response.content
+    except Exception as e:
+        return f"❌ Lỗi khi gợi ý: {str(e)}"
 # Xuất danh sách tool để Agent sử dụng
-subtask_tools_list = [subtask_find_parent_task, subtask_create_api]
+subtask_tools_list = [subtask_find_parent_task, subtask_create_api, subtask_generate_suggestions]
