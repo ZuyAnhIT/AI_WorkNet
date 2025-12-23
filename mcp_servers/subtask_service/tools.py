@@ -141,6 +141,10 @@ def subtask_generate_suggestions(parent_title: str, parent_description: str = ""
     💡 [SUBTASK-SUGGEST] Sử dụng trí tuệ nhân tạo để phân tích task cha và đề xuất danh sách các việc con (subtask) thực tế.
     """
     print(f"\n💡 [SUBTASK-SUGGEST] Đang dùng Gemini để phân tích task: '{parent_title}'...")
+
+    # --- KHỞI TẠO BIẾN llm Ở ĐÂY (Sửa lỗi Unresolved reference) ---
+    llm = analytics_engine.get_llm()
+
     system_instruction = """
     Bạn là một Senior Project Manager. Hãy chia nhỏ task được cung cấp thành 3-5 subtask cụ thể.
     Yêu cầu trả về danh sách ngắn gọn, thực tế, chia theo các lớp: Giao diện, Xử lý Logic, và Kiểm thử.
@@ -150,6 +154,7 @@ def subtask_generate_suggestions(parent_title: str, parent_description: str = ""
     user_content = f"Task cha: {parent_title}\nMô tả: {parent_description if parent_description else 'Không có mô tả'}"
 
     try:
+        # Gọi invoke thông qua biến llm đã khởi tạo
         response = llm.invoke([
             ("system", system_instruction),
             ("human", user_content)
