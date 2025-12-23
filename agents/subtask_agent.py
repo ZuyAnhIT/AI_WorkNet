@@ -4,9 +4,11 @@ from orchestrator.prompts.subtask import SUBTASK_AGENT_SYSTEM_PROMPT
 
 # --- CHỈ IMPORT TOOL TỪ SUBTASK SERVICE ---
 # Vì Context (ID) đã được api.py cung cấp sẵn trong System Message
+# 1. Đảm bảo đã import tool mới
 from mcp_servers.subtask_service.tools import (
-    subtask_find_parent_task,  # Dùng để tìm taskId từ tên task cha
-    subtask_create_api         # Dùng để thực thi tạo subtask
+    subtask_find_parent_task,
+    subtask_create_api,
+    subtask_generate_suggestions  # <--- THÊM VÀO ĐÂY
 )
 
 def create_subtask_agent():
@@ -20,8 +22,9 @@ def create_subtask_agent():
 
     # 3. DANH SÁCH TOOL (Chỉ bao gồm các tool nghiệp vụ Subtask)
     tools = [
-        subtask_find_parent_task, # Bước 1: Tìm ID task cha
-        subtask_create_api         # Bước 2: Tạo subtask
+        subtask_find_parent_task,
+        subtask_create_api,
+        subtask_generate_suggestions  # <--- THÊM VÀO ĐÂY
     ]
 
     # Thiết lập Prompt
@@ -29,6 +32,8 @@ def create_subtask_agent():
     # luôn kiểm tra thông tin ID trong tin nhắn hệ thống trước khi hỏi User.
     prompt = ChatPromptTemplate.from_messages([
         ("system", SUBTASK_AGENT_SYSTEM_PROMPT),
+        ("system",
+         "⚠️ LƯU Ý: Nếu User yêu cầu GỢI Ý hoặc CHIA NHỎ, bạn phải đóng vai Senior Lead để brainstorm theo Kịch bản 2. TUYỆT ĐỐI KHÔNG TỪ CHỐI."),
         MessagesPlaceholder(variable_name="messages"),
     ])
 

@@ -50,10 +50,7 @@ Trước khi thực hiện thay đổi (Tạo/Xóa/Sửa/Import), hãy tóm tắ
 | Thông tin | Chi tiết |
 | :--- | :--- |
 | **Hành động** | [Tạo mới / Cập nhật / Xóa / Import Excel] |
-| **Đối tượng** | [Tên Task / Dự án] |
 | **Số lượng** | [1 hoặc số lượng cụ thể nếu là Batch] |
-| **Nơi thực hiện** | [Tên Dự án / Công ty] |
-| **Thời gian** | [DD/MM/YYYY] |
 
 > **Thông tin này chuẩn chưa bạn ơi?** (Gõ "OK" để mình làm luôn nhé)
 """
@@ -64,6 +61,10 @@ SUCCESS_INSTRUCTION = """
 Khi nhận được kết quả "Thành công" từ Tool, hãy hiển thị đẹp như sau:
 
 ### THAO TÁC THÀNH CÔNG
+# 📋 QUY TẮC PHẢN HỒI CUỐI CÙNG (SUCCESS TEMPLATE)
+Khi Tool thực hiện thành công, hãy trả lời theo mẫu sau:
+- "📋 Tuyệt vời! Mình đã [Hành động] '[Tên Task/Dự án]' xong rồi nhé!"
+- Tuyệt đối không kèm theo "ID là...", "Mã số...". Nếu người dùng hỏi ID, hãy lịch sự từ chối và nói rằng bạn quản lý theo tên để bảo mật.
 | Kết quả | Chi tiết |
 | :--- | :--- |
 | **Trạng thái** | **Đã hoàn tất** |
