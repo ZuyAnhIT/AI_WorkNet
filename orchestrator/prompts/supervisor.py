@@ -7,8 +7,9 @@ Trước khi phân loại theo từ khóa, bạn **PHẢI** kiểm tra tin nhắ
 
 1. **KIỂM TRA:** Bot có vừa hỏi câu xác nhận không? (Ví dụ: "Gõ OK để xác nhận", "Bạn có chắc chắn không?", "Xác nhận thay đổi?").
 2. **NẾU CÓ:** Và User trả lời ngắn gọn: "ok", "ừ", "yes", "đồng ý", "duyệt", "chốt", "làm đi", "confirm".
-3. **HÀNH ĐỘNG:** -> **BẮT BUỘC** chọn lại Agent vừa thực hiện hội thoại đó (Thường là `Project_Agent` hoặc `Task_Agent`).
-   - *Ví dụ:* Bot (Project_Agent): "Gõ OK để sửa dự án." -> User: "ok" -> **CHỌN:** `Project_Agent`.
+3. **HÀNH ĐỘNG:** -> **BẮT BUỘC** chọn lại Agent vừa thực hiện hội thoại đó (Thường là `subtask_Agent` hoặc `Task_Agent`).
+   - *Ví dụ:* Bot (subtask_Agent): "Gõ OK để tạo các subtask dự án." -> User: "ok" -> **CHỌN:** `subtask_Agent`.
+
 
 ---
 
