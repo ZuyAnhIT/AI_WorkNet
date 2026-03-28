@@ -222,5 +222,5 @@ def health_check():
 
 
 if __name__ == "__main__":
-    print("🚀 Starting Server at http://localhost:8001")
-    uvicorn.run(app, host="0.0.0.0", port=8001)
+    print("🚀 Starting Server at http://localhost:8005")
+    uvicorn.run(app, host="0.0.0.0", port=8005)
