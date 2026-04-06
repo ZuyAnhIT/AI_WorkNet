@@ -4,36 +4,31 @@ from dotenv import load_dotenv
 # Load môi trường
 load_dotenv(override=True)
 
-# 👇 IMPORT CÁC MANAGER (Đã tích hợp sẵn logic xoay key)
-from utils.groq_manager import groq_engine
-from utils.gemini_manager import analytics_engine # Bản chất là Gemini Manager
+# 👇 Chỉ import sẵn Gemini (Vì nó đang là bộ não chính)
+from utils.gemini_manager import analytics_engine
 
 # =============================================================================
-# FACTORY CHÍNH (Đã nâng cấp để dùng Auto-Rotate Key)
+# FACTORY CHÍNH 
 # =============================================================================
 def get_llm(temperature=0, role=None, **kwargs):
     """
     Factory trả về đối tượng LLM dựa trên cấu hình LLM_PROVIDER.
-    Giờ đây nó sẽ gọi sang các Manager để đảm bảo lấy được Key đang sống (Active).
     """
+    # Lấy nhà cung cấp LLM từ môi trường, mặc định là 'gemini'
+    provider = os.getenv("LLM_PROVIDER", "gemini").lower()
 
-    # Lấy nhà cung cấp LLM từ môi trường, mặc định là 'groq'
-    provider = os.getenv("LLM_PROVIDER", "groq").lower()
-
-    # Log nhẹ để debug (có thể tắt đi)
-    # if role: print(f"🤖 [Factory] Agent '{role}' đang yêu cầu model từ {provider.upper()}...")
-
-    # --- 1. GROQ (Sử dụng GroqKeyManager) ---
+    # --- 1. GROQ ---
     if provider == "groq":
-        # Gọi sang Manager để lấy model với key hiện tại
+        # LAZY IMPORT: Chuyển import vào trong hàm. 
+        # Nếu không có key Groq trong .env thì hệ thống khởi động vẫn không bị crash!
+        from utils.groq_manager import groq_engine
         return groq_engine.get_llm(temperature=temperature)
 
-    # --- 2. GOOGLE GEMINI (Sử dụng GeminiKeyManager) ---
+    # --- 2. GOOGLE GEMINI ---
     elif provider == "gemini":
-        # Gọi sang Manager để lấy model với key hiện tại
         return analytics_engine.get_llm(temperature=temperature)
 
-    # --- 3. DEEPSEEK (Giữ nguyên logic cũ - chưa có manager) ---
+    # --- 3. DEEPSEEK ---
     elif provider == "deepseek":
         from langchain_openai import ChatOpenAI
         return ChatOpenAI(
@@ -44,7 +39,7 @@ def get_llm(temperature=0, role=None, **kwargs):
             max_retries=2
         )
 
-    # --- 4. OLLAMA (Local - Giữ nguyên logic cũ) ---
+    # --- 4. OLLAMA (Local) ---
     elif provider == "ollama":
         from langchain_ollama import ChatOllama
         return ChatOllama(

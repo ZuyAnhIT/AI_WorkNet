@@ -14,27 +14,26 @@ from agents.analytics_agent import create_analytics_agent
 from orchestrator.prompts import SUPERVISOR_SYSTEM_PROMPT
 from utils.llm_factory import get_llm
 
-# --- IMPORT MANAGER ĐỂ XOAY KEY (MỚI) ---
-from utils.gemini_manager import analytics_engine
-from utils.groq_manager import groq_engine  # <--- Manager Groq
+# --- IMPORT MANAGER ĐỂ XOAY KEY (SỬ DỤNG GEMINI CHO TOÀN HỆ THỐNG) ---
+from utils.gemini_manager import analytics_engine as gemini_engine
 from orchestrator.prompts.analytics import ANALYTICS_AGENT_SYSTEM_PROMPT
 
 
 # =============================================================================
-# 0. HELPER: HÀM CHẠY RETRY + ROTATE KEY (CORE LOGIC)
+# 0. HELPER: HÀM CHẠY RETRY + ROTATE KEY (ĐÃ CHUẨN HÓA CHO GEMINI)
 # =============================================================================
-def run_with_retry(agent_factory_func, messages, manager, engine_name="Groq"):
+def run_with_retry(agent_factory_func, messages, manager, engine_name="Gemini"):
     """
-    Wrapper giúp chạy Agent với cơ chế tự động xoay key khi gặp lỗi Rate Limit.
+    Wrapper giúp chạy Agent với cơ chế tự động xoay key khi gặp lỗi Rate Limit/Quota.
     """
-    # Lấy số lượng key tối đa để biết đường dừng lại
-    max_retries = len(manager.keys) if hasattr(manager, "keys") else 3
+    # Lấy số lượng key tối đa để biết đường dừng lại (Cập nhật dùng api_keys cho Gemini)
+    max_retries = len(manager.api_keys) if hasattr(manager, "api_keys") else 3
     attempt = 0
 
     while attempt < max_retries:
         try:
             # 1. Tạo lại Agent/Model với Key hiện tại (Active Key)
-            if engine_name == "Analytics":
+            if engine_name == "Analytics" or agent_factory_func is None:
                 # Analytics (Gemini) bind tool trực tiếp
                 llm = manager.get_llm()
                 # Tạo tools mới nhất
@@ -43,16 +42,15 @@ def run_with_retry(agent_factory_func, messages, manager, engine_name="Groq"):
                 # Gemini gọi invoke trực tiếp với list messages
                 response = agent_runnable.invoke(messages)
             else:
-                # Các agent khác (Groq): Gọi factory để lấy model mới nhất
+                # Các agent khác: Gọi factory để lấy model mới nhất
                 agent_runnable, _ = agent_factory_func()
-                # Groq gọi invoke với dict {"messages": ...}
                 response = agent_runnable.invoke({"messages": messages})
 
             return response
 
         except Exception as e:
             error_msg = str(e).lower()
-            # Các lỗi liên quan đến Rate Limit / Key / Quota
+            # Các lỗi liên quan đến Rate Limit / Key / Quota của Google
             if any(x in error_msg for x in
                    ["429", "403", "quota", "resource_exhausted", "rate_limit", "api_key", "overloaded"]):
                 print(f"⚠️ [{engine_name} Error] Key lỗi/hết hạn: {error_msg}")
@@ -123,66 +121,82 @@ def create_context_prompt(state: AgentState) -> SystemMessage:
     """
     return SystemMessage(content=prompt)
 
+    # =============================================================================
+# 3.5. HELPER: BỘ LỌC LỊCH SỬ CHO GEMINI (CHỐNG LỖI 400 INVALID SEQUENCE)
+# =============================================================================
+def filter_gemini_messages(messages):
+    """Lọc rác từ lịch sử cũ, tránh vi phạm luật Role của Gemini"""
+    # 1. Tìm tin nhắn Human cuối cùng (Đánh dấu bắt đầu phiên hiện tại)
+    last_human_idx = 0
+    for i in range(len(messages) - 1, -1, -1):
+        if isinstance(messages[i], HumanMessage):
+            last_human_idx = i
+            break
+            
+    # Phiên đang xử lý (Giữ nguyên vẹn cả Tool_calls và ToolMessage để AI đọc)
+    current_session = messages[last_human_idx:]
+    
+    # 2. Xử lý lịch sử cũ: Chỉ lấy TEXT thuần, vứt bỏ các object Tool cũ
+    old_history = []
+    for m in messages[:last_human_idx]:
+        if isinstance(m, HumanMessage):
+            old_history.append(HumanMessage(content=m.content))
+        elif isinstance(m, AIMessage) and m.content:
+            old_history.append(AIMessage(content=m.content))
+            
+    # Kết hợp: Giữ tối đa 4 tin nhắn cũ làm ngữ cảnh + Phiên hiện tại
+    return old_history[-4:] + current_session
+
 
 # =============================================================================
-# 4. ĐỊNH NGHĨA CÁC NODE (ĐÃ ÁP DỤNG XOAY KEY)
+# 4. ĐỊNH NGHĨA CÁC NODE (ĐÃ TÍCH HỢP BỘ LỌC GEMINI)
 # =============================================================================
 
 def project_node(state: AgentState):
-    """Xử lý Project - Có Retry Groq + Context"""
     context_msg = create_context_prompt(state)
-    messages = [context_msg] + state["messages"]
-
-    # 🔥 Gọi qua wrapper để tự động xoay key
-    response = run_with_retry(create_project_agent, messages, groq_engine, "Groq")
+    # 🔥 Sử dụng hàm filter để dọn dẹp lịch sử
+    messages = [context_msg] + filter_gemini_messages(state["messages"])
+    response = run_with_retry(create_project_agent, messages, gemini_engine, "Gemini")
     return {"messages": [response]}
 
 
 def task_node(state: AgentState):
-    """Xử lý Task - Có Retry Groq + Context"""
     context_msg = create_context_prompt(state)
-    messages = [context_msg] + state["messages"]
-
-    # 🔥 Gọi qua wrapper
-    response = run_with_retry(create_task_agent, messages, groq_engine, "Groq")
+    messages = [context_msg] + filter_gemini_messages(state["messages"])
+    response = run_with_retry(create_task_agent, messages, gemini_engine, "Gemini")
     return {"messages": [response]}
 
-# --- NODE MỚI CHO SUBTASK ---
-def subtask_node(state: AgentState):
-    """Xử lý Subtask - Có Retry Groq + Context"""
-    context_msg = create_context_prompt(state)
-    messages = [context_msg] + state["messages"]
 
-    # 🔥 Gọi qua wrapper
-    response = run_with_retry(create_subtask_agent, messages, groq_engine, "Groq")
+def subtask_node(state: AgentState):
+    context_msg = create_context_prompt(state)
+    messages = [context_msg] + filter_gemini_messages(state["messages"])
+    response = run_with_retry(create_subtask_agent, messages, gemini_engine, "Gemini")
     return {"messages": [response]}
 
 
 def analytics_node(state: AgentState):
-    """Xử lý Analytics - Có Retry Gemini + Context"""
     print("📊 [Router] Chuyển hướng sang ANALYTICS AGENT...")
     context_msg = create_context_prompt(state)
-
-    # Ghép prompt đặc biệt
     messages = [
                    {"role": "system", "content": ANALYTICS_AGENT_SYSTEM_PROMPT},
                    context_msg,
-               ] + state["messages"]
-
-    # 🔥 Gọi qua wrapper (Analytics dùng logic riêng trong wrapper)
-    response = run_with_retry(None, messages, analytics_engine, "Analytics")
+               ] + filter_gemini_messages(state["messages"])
+    response = run_with_retry(None, messages, gemini_engine, "Analytics")
     return {"messages": [response]}
 
 
 def general_node(state: AgentState):
-    """General Agent (Ít lỗi, nhưng cứ dùng create mới cho chắc)"""
-    model = create_general_agent()
-    response = model.invoke({"messages": state["messages"]})
-    return {"messages": [response]}
-
+    try:
+        model = create_general_agent()
+        response = model.invoke({"messages": filter_gemini_messages(state["messages"])})
+        return {"messages": [response]}
+    except Exception as e:
+        print(f"❌ [General Agent Error]: {str(e)}")
+        from langchain_core.messages import AIMessage
+        return {"messages": [AIMessage(content="⚠️ Trợ lý đang bận xử lý dữ liệu. Vui lòng thử lại!")]}
 
 # =============================================================================
-# 5. SUPERVISOR NODE (CŨNG CẦN XOAY KEY NẾU GROQ HẾT QUOTA)
+# 5. SUPERVISOR NODE (ĐÃ ĐỔI SANG GEMINI)
 # =============================================================================
 def supervisor_node(state: AgentState):
     messages = state["messages"]
@@ -227,7 +241,7 @@ def supervisor_node(state: AgentState):
         f"=== PHÂN LOẠI AGENT ===\n"
         f"1. Analytics_Agent: Giao việc, dự báo, báo cáo, phân tích sâu.\n"
         f"2. Task_Agent: Tạo/Sửa/Xóa task chính, xử lý file excel.\n"
-        f"3. Subtask_Agent: Quản lý việc con, chia nhỏ công việc.\n" # <--- KHAI BÁO THÊM
+        f"3. Subtask_Agent: Quản lý việc con, chia nhỏ công việc.\n" 
         f"4. Project_Agent: Quản lý dự án, workspace.\n"
         f"===================================\n"
         f"HISTORY:\n{history_str}\n"
@@ -235,33 +249,33 @@ def supervisor_node(state: AgentState):
         "DECISION [Project_Agent, Task_Agent, Subtask_Agent, General_Agent, Analytics_Agent]:"
     )
 
-    # 🔥 LOGIC RETRY CHO SUPERVISOR
-    max_retries = len(groq_engine.keys)
+    # 🔥 LOGIC RETRY CHO SUPERVISOR BẰNG GEMINI
+    max_retries = len(gemini_engine.api_keys)
     attempt = 0
     result = "General_Agent"
 
     while attempt < max_retries:
         try:
             # Lấy model với Key hiện tại
-            llm = groq_engine.get_llm(temperature=0)
+            llm = gemini_engine.get_llm(temperature=0)
             ai_msg = llm.invoke(router_prompt)
             result = ai_msg.content.strip()
             print(f"\n[ROUTER AI] Selected: {result}")
             break
         except Exception as e:
             print(f"⚠️ [Supervisor Error] Key lỗi: {e}")
-            groq_engine._rotate_key()
+            gemini_engine._rotate_key()
             attempt += 1
 
     # --- Mapping logic ---
     if "Analytics" in result: return {"next": "Analytics_Agent"}
-    if "Subtask" in result: return {"next": "Subtask_Agent"} # <--- KHAI BÁO THÊM
+    if "Subtask" in result: return {"next": "Subtask_Agent"}
     if "Task" in result: return {"next": "Task_Agent"}
     if "Project" in result: return {"next": "Project_Agent"}
     if "General" in result: return {"next": "General_Agent"}
 
     # --- C. FALLBACK ---
-    if any(k in user_text for k in ["subtask", "việc con", "task con", "chia nhỏ"]): # <--- KHAI BÁO THÊM
+    if any(k in user_text for k in ["subtask", "việc con", "task con", "chia nhỏ"]): 
         return {"next": "Subtask_Agent"}
     if any(k in user_text for k in ["phân tích", "tại sao", "rủi ro", "chiến lược", "báo cáo"]):
         return {"next": "Analytics_Agent"}
@@ -280,14 +294,14 @@ workflow = StateGraph(AgentState)
 workflow.add_node("Supervisor", supervisor_node)
 workflow.add_node("Project_Agent", project_node)
 workflow.add_node("Task_Agent", task_node)
-workflow.add_node("Subtask_Agent", subtask_node) # <--- KHAI BÁO THÊM
+workflow.add_node("Subtask_Agent", subtask_node) 
 workflow.add_node("General_Agent", general_node)
 workflow.add_node("Analytics_Agent", analytics_node)
 
 # Tool Nodes
 workflow.add_node("project_tools", ToolNode(project_tools))
 workflow.add_node("task_tools", ToolNode(task_tools))
-workflow.add_node("subtask_tools", ToolNode(subtask_tools)) # <--- KHAI BÁO THÊM
+workflow.add_node("subtask_tools", ToolNode(subtask_tools)) 
 workflow.add_node("analytics_tools", ToolNode(analytics_tools))
 
 # Edges
@@ -299,7 +313,7 @@ workflow.add_conditional_edges(
     {
         "Project_Agent": "Project_Agent",
         "Task_Agent": "Task_Agent",
-        "Subtask_Agent": "Subtask_Agent", # <--- KHAI BÁO THÊM
+        "Subtask_Agent": "Subtask_Agent", 
         "General_Agent": "General_Agent",
         "Analytics_Agent": "Analytics_Agent",
         "END": END
